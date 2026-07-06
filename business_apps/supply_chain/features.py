@@ -1,0 +1,8 @@
+FEATURE_TRANSFER_ENABLED = "transfer_enabled"
+FEATURE_SALES_RETURN_ENABLED = "sales_return_enabled"
+FEATURE_PURCHASE_RETURN_ENABLED = "purchase_return_enabled"
+FEATURE_INVENTORY_ALERT_ENABLED = "inventory_alert_enabled"
+FEATURE_TRACE_ENABLED = "trace_enabled"
+FEATURE_OUTBOUND_REQUIRES_ALLOCATION = "outbound_requires_allocation"
+FEATURE_TRANSFER_APPROVAL = "transfer_approval"
+FEATURE_RETURN_APPROVAL = "return_approval"

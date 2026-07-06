@@ -1,0 +1,11 @@
+FEATURE_SUPPLIER_APPROVAL = "supplier_approval"
+FEATURE_SUPPLIER_CODE_AUTO_GENERATE = "supplier_code_auto_generate"
+FEATURE_SUPPLIER_CREDIT_MANAGEMENT = "supplier_credit_management"
+FEATURE_SUPPLIER_RATING_ENABLED = "supplier_rating_enabled"
+FEATURE_SUPPLIER_ATTACHMENT_ENABLED = "supplier_attachment_enabled"
+FEATURE_SUPPLIER_OWNER_TRANSFER_ENABLED = "supplier_owner_transfer_enabled"
+
+FIELD_SUPPLIER_TAX_RATE = "supplier.tax_rate"
+FIELD_SUPPLIER_CURRENCY = "supplier.currency"
+FIELD_SUPPLIER_OWNER = "supplier.owner"
+FIELD_SUPPLIER_CREDIT_DAYS = "supplier.credit_days"

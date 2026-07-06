@@ -1,0 +1,8 @@
+venv
+__pycache__
+**/__pycache__
+db.sqlite3
+.env
+.env.production.example
+.trae/
+media/generation_exports

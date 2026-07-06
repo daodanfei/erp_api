@@ -1,0 +1,12 @@
+FEATURE_CUSTOMER_APPROVAL = "customer_approval"
+FEATURE_CUSTOMER_CODE_AUTO_GENERATE = "customer_code_auto_generate"
+FEATURE_CREDIT_LIMIT_ENABLED = "credit_limit_enabled"
+FEATURE_FOLLOW_RECORD_ENABLED = "follow_record_enabled"
+FEATURE_CUSTOMER_TRANSFER_ENABLED = "customer_transfer_enabled"
+FEATURE_CUSTOMER_ATTACHMENT_ENABLED = "customer_attachment_enabled"
+
+FIELD_CUSTOMER_CREDIT_LIMIT = "customer.credit_limit"
+FIELD_CUSTOMER_CREDIT_DAYS = "customer.credit_days"
+FIELD_CUSTOMER_OWNER = "customer.owner"
+FIELD_CUSTOMER_PHONE = "customer.phone"
+FIELD_CUSTOMER_ADDRESS = "customer.address"

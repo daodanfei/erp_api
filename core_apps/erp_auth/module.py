@@ -1,0 +1,66 @@
+from core_apps.modules.registry import ModuleDefinition
+
+
+MODULE = ModuleDefinition(
+    key="erp_auth",
+    label="ERP 租户认证",
+    django_app="core_apps.erp_auth",
+    api_prefix="api/erp-auth/",
+    depends_on=("tenant",),
+    menus=(
+        {
+            "code": "system",
+            "name": "系统管理",
+            "path": "/system",
+            "icon": "SettingOutlined",
+            "order": 100,
+        },
+        {
+            "code": "system:user",
+            "name": "用户管理",
+            "parent": "system",
+            "path": "/system/users",
+            "component": "system/UserList",
+            "icon": "UserOutlined",
+            "order": 101,
+        },
+        {
+            "code": "system:dept",
+            "name": "部门管理",
+            "parent": "system",
+            "path": "/system/depts",
+            "component": "system/DeptList",
+            "icon": "ApartmentOutlined",
+            "order": 102,
+        },
+        {
+            "code": "system:role",
+            "name": "角色管理",
+            "parent": "system",
+            "path": "/system/roles",
+            "component": "system/RoleList",
+            "icon": "TeamOutlined",
+            "order": 103,
+        },
+        {
+            "code": "system:perm",
+            "name": "权限管理",
+            "parent": "system",
+            "path": "/system/perms",
+            "component": "system/PermissionList",
+            "icon": "SafetyOutlined",
+            "order": 104,
+        },
+    ),
+    permissions=(
+        {"code": "user:create", "name": "新增用户", "parent": "system:user"},
+        {"code": "user:update", "name": "编辑用户", "parent": "system:user"},
+    ),
+    features=("ERP 用户", "租户角色", "租户权限", "租户部门", "租户登录"),
+    workflows=("租户管理员初始化",),
+    field_rules=(),
+    default_rules=(),
+    public_services=(
+        "core_apps.erp_auth.services.ERPUserProvisionService",
+    ),
+)

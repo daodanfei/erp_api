@@ -1,0 +1,6 @@
+FEATURE_AUTO_CREATE_RECEIVABLE = "auto_create_receivable"
+FEATURE_RECEIPT_APPROVAL = "receipt_approval"
+FEATURE_ALLOW_PARTIAL_RECEIPT = "allow_partial_receipt"
+FEATURE_OVERDUE_TRACKING = "overdue_tracking"
+FEATURE_CUSTOMER_RECONCILIATION_ENABLED = "customer_reconciliation_enabled"
+FEATURE_WRITEOFF_ENABLED = "writeoff_enabled"

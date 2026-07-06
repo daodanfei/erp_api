@@ -1,0 +1,188 @@
+from rest_framework import viewsets, status, permissions
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from core_apps.common.viewsets import BaseBusinessViewSet
+from .models import SalesOrder, SalesOrderItem, Shipment, OrderApprovalLog, OrderAttachment
+from .serializers import SalesOrderSerializer, SalesOrderItemSerializer, ShipmentSerializer, OrderApprovalLogSerializer
+from business_apps.supply_chain.serializers import OutboundOrderSerializer
+from .services import SalesOrderService
+from business_apps.crm.models import Customer
+from business_apps.inventory.models import Product
+
+MODULE_KEY = "sales"
+
+
+class SalesOrderViewSet(BaseBusinessViewSet):
+    module_key = MODULE_KEY
+    queryset = SalesOrder.objects.all()
+    serializer_class = SalesOrderSerializer
+    user_field = 'created_by'
+    
+    permission_map = {
+        'list': 'sales:order:view',
+        'retrieve': 'sales:order:view',
+        'create': 'sales:order:create',
+        'update': 'sales:order:update',
+        'destroy': 'sales:order:delete',
+        'approve': 'sales:order:approve',
+        'reject': 'sales:order:approve',
+        'allocate': 'sales:order:allocate',
+        'create_outbound': 'sales:order:ship',
+        'ship': 'sales:order:ship',
+        'close': 'sales:order:close',
+        'cancel': 'sales:order:cancel',
+        'statistics': 'sales:order:view',
+    }
+
+    def create(self, request, *args, **kwargs):
+        customer_id = request.data.get('customer')
+        items_data = request.data.get('items', [])
+        remark = request.data.get('remark')
+        expected_delivery_date = request.data.get('expected_delivery_date')
+
+        if not customer_id or not items_data:
+            return Response({"detail": "缺少客户或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            customer = Customer.objects.get(id=customer_id)
+            # Resolve products
+            processed_items = []
+            for item in items_data:
+                processed_items.append({
+                    'product': Product.objects.get(id=item['product']),
+                    'warehouse': item.get('warehouse'),
+                    'quantity': item['quantity'],
+                    'unit_price': item['unit_price'],
+                })
+            
+            order = SalesOrderService.create_order(
+                customer,
+                processed_items,
+                request.user,
+                remark,
+                expected_delivery_date,
+            )
+            serializer = self.get_serializer(order)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    def update(self, request, *args, **kwargs):
+        order = self.get_object()
+        if order.status not in ('DRAFT', 'REJECTED'):
+            return Response({"detail": "只有草稿或已驳回状态的订单可以修改"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            customer_id = request.data.get('customer')
+            items_data = request.data.get('items')
+            remark = request.data.get('remark')
+            expected_delivery_date = request.data.get('expected_delivery_date')
+
+            customer = Customer.objects.get(id=customer_id) if customer_id else None
+            processed_items = None
+            if items_data is not None:
+                processed_items = []
+                for item in items_data:
+                    processed_items.append({
+                        'product': Product.objects.get(id=item['product']),
+                        'warehouse': item.get('warehouse'),
+                        'quantity': item['quantity'],
+                        'unit_price': item['unit_price'],
+                    })
+
+            order = SalesOrderService.update_order(
+                order,
+                request.user,
+                customer=customer,
+                items_data=processed_items,
+                remark=remark,
+                expected_delivery_date=expected_delivery_date,
+            )
+            serializer = self.get_serializer(order)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        order = self.get_object()
+        try:
+            SalesOrderService.submit_order(order, request.user)
+            return Response({'status': 'submitted'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        order = self.get_object()
+        comment = request.data.get('comment')
+        try:
+            SalesOrderService.approve_order(order, request.user, comment)
+            return Response({'status': 'approved'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        order = self.get_object()
+        comment = request.data.get('comment')
+        try:
+            SalesOrderService.reject_order(order, request.user, comment)
+            return Response({'status': 'rejected'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def allocate(self, request, pk=None):
+        order = self.get_object()
+        try:
+            SalesOrderService.allocate_stock(order, request.user)
+            return Response({'status': 'allocated'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def create_outbound(self, request, pk=None):
+        order = self.get_object()
+        items_data = request.data.get('items', [])
+        
+        try:
+            processed_items = []
+            for item in items_data:
+                processed_items.append({
+                    'order_item': SalesOrderItem.objects.get(id=item['order_item']),
+                    'quantity': item['quantity']
+                })
+            
+            outbound_orders = SalesOrderService.create_outbound_request(order, processed_items, request.user)
+            serializer = OutboundOrderSerializer(outbound_orders, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def ship(self, request, pk=None):
+        return self.create_outbound(request, pk=pk)
+
+    @action(detail=True, methods=['post'])
+    def close(self, request, pk=None):
+        order = self.get_object()
+        try:
+            SalesOrderService.close_order(order, request.user)
+            return Response({'status': 'closed'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        order = self.get_object()
+        try:
+            SalesOrderService.cancel_order(order, request.user)
+            return Response({'status': 'cancelled'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'])
+    def statistics(self, request):
+        stats = SalesOrderService.get_statistics()
+        return Response(stats)

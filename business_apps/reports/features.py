@@ -1,0 +1,8 @@
+FEATURE_DASHBOARD = "dashboard"
+FEATURE_SALES_ANALYSIS = "sales_analysis"
+FEATURE_PURCHASE_ANALYSIS = "purchase_analysis"
+FEATURE_INVENTORY_ANALYSIS = "inventory_analysis"
+FEATURE_CUSTOMER_ANALYSIS = "customer_analysis"
+FEATURE_SUPPLIER_ANALYSIS = "supplier_analysis"
+FEATURE_PRODUCT_ANALYSIS = "product_analysis"
+FEATURE_EXPORT_CENTER = "export_center"

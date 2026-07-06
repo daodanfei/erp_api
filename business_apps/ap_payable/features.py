@@ -1,0 +1,6 @@
+FEATURE_AUTO_CREATE_PAYABLE = "auto_create_payable"
+FEATURE_PAYMENT_APPROVAL = "payment_approval"
+FEATURE_ALLOW_PARTIAL_PAYMENT = "allow_partial_payment"
+FEATURE_SUPPLIER_RECONCILIATION_ENABLED = "supplier_reconciliation_enabled"
+FEATURE_ALLOCATION_ENABLED = "allocation_enabled"
+FEATURE_WRITEOFF_ENABLED = "writeoff_enabled"

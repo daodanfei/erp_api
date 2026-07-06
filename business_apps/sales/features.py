@@ -1,0 +1,10 @@
+FEATURE_APPROVAL = "approval"
+FEATURE_CREDIT_CONTROL = "credit_control"
+FEATURE_PARTIAL_SHIPMENT = "partial_shipment"
+FEATURE_OUTBOUND_AUTO_AR = "outbound_auto_ar"
+FEATURE_CUSTOMER_BLACKLIST_BLOCK = "customer_blacklist_block"
+FEATURE_PRICE_EDITABLE = "price_editable"
+
+WORKFLOW_SALES_ORDER_SUBMIT = "sales_order_submit"
+FIELD_SALES_ORDER_APPROVER = "sales_order.approver"
+FIELD_SALES_ORDER_ITEM_WAREHOUSE = "sales_order_item.warehouse"

@@ -17,6 +17,41 @@ FEATURE_MODULE_REQUIREMENTS = {
 }
 
 
+def _normalize_inventory_warehouse_rules(normalized: dict) -> None:
+    inventory_config = normalized["module_configs"].get("inventory")
+    if inventory_config is None:
+        return
+
+    features = inventory_config.setdefault("features", {})
+    field_rules = inventory_config.setdefault("field_rules", {})
+    multi_warehouse = bool(features.get("multi_warehouse"))
+    warehouse_required = bool(features.get("warehouse_required_on_transaction"))
+    stocktake_enabled = bool(features.get("stocktake", True))
+
+    warehouse_visible = multi_warehouse or warehouse_required
+
+    field_rules["inventory_transaction.warehouse"] = {
+        "visible": warehouse_visible,
+        "required": warehouse_visible,
+        "readonly": not warehouse_visible,
+    }
+    field_rules["purchase_order_item.warehouse"] = {
+        "visible": warehouse_visible,
+        "required": warehouse_visible,
+        "readonly": not warehouse_visible,
+    }
+    field_rules["sales_order_item.warehouse"] = {
+        "visible": warehouse_visible,
+        "required": warehouse_visible,
+        "readonly": not warehouse_visible,
+    }
+    field_rules["stocktake.warehouse"] = {
+        "visible": stocktake_enabled and warehouse_visible,
+        "required": stocktake_enabled and warehouse_visible,
+        "readonly": not (stocktake_enabled and warehouse_visible),
+    }
+
+
 def _registered_module_keys() -> set[str]:
     modules = (*get_core_modules(), *get_business_modules())
     return {module.key for module in modules}
@@ -112,5 +147,6 @@ def validate_blueprint_config(config: dict | None) -> dict:
         )
 
     _normalize_feature_dependencies(normalized)
+    _normalize_inventory_warehouse_rules(normalized)
 
     return normalized

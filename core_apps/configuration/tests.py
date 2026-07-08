@@ -202,3 +202,102 @@ class ConfigurationValidationTest(SimpleTestCase):
         self.assertFalse(result["module_configs"]["platform"]["features"]["code_rule_center"])
         self.assertFalse(result["module_configs"]["reports"]["features"]["dashboard"])
         self.assertIn("sales_analysis", result["module_configs"]["reports"]["features"])
+
+    def test_validate_blueprint_config_forces_warehouse_fields_visible_when_transactions_require_warehouse(self):
+        result = validate_blueprint_config(
+            {
+                "basic": {
+                    "name": "warehouse_conflict_erp",
+                    "industry": "trade",
+                    "mode": "saas",
+                },
+                "enabled_modules": ["inventory", "purchase", "sales"],
+                "module_configs": {
+                    "inventory": {
+                        "features": {
+                            "multi_warehouse": True,
+                            "warehouse_required_on_transaction": True,
+                            "stocktake": True,
+                        },
+                        "workflows": {},
+                        "field_rules": {
+                            "inventory_transaction.warehouse": {
+                                "visible": False,
+                                "required": False,
+                                "readonly": True,
+                            },
+                            "purchase_order_item.warehouse": {
+                                "visible": False,
+                                "required": False,
+                                "readonly": True,
+                            },
+                            "sales_order_item.warehouse": {
+                                "visible": False,
+                                "required": False,
+                                "readonly": True,
+                            },
+                            "stocktake.warehouse": {
+                                "visible": False,
+                                "required": False,
+                                "readonly": True,
+                            },
+                        },
+                        "defaults": {"default_warehouse_code": "MAIN"},
+                    }
+                },
+            }
+        )
+
+        inventory_rules = result["module_configs"]["inventory"]["field_rules"]
+        self.assertEqual(
+            inventory_rules["inventory_transaction.warehouse"],
+            {"visible": True, "required": True, "readonly": False},
+        )
+        self.assertEqual(
+            inventory_rules["purchase_order_item.warehouse"],
+            {"visible": True, "required": True, "readonly": False},
+        )
+        self.assertEqual(
+            inventory_rules["sales_order_item.warehouse"],
+            {"visible": True, "required": True, "readonly": False},
+        )
+        self.assertEqual(
+            inventory_rules["stocktake.warehouse"],
+            {"visible": True, "required": True, "readonly": False},
+        )
+
+    def test_validate_blueprint_config_keeps_single_warehouse_fields_hidden(self):
+        result = validate_blueprint_config(
+            {
+                "basic": {
+                    "name": "single_warehouse_erp",
+                    "industry": "trade",
+                    "mode": "saas",
+                },
+                "enabled_modules": ["inventory"],
+                "module_configs": {
+                    "inventory": {
+                        "features": {
+                            "multi_warehouse": False,
+                            "warehouse_required_on_transaction": False,
+                            "stocktake": True,
+                        },
+                        "workflows": {},
+                        "field_rules": {
+                            "purchase_order_item.warehouse": {
+                                "visible": True,
+                                "required": True,
+                                "readonly": False,
+                            },
+                        },
+                        "defaults": {"default_warehouse_code": "MAIN"},
+                    }
+                },
+            }
+        )
+
+        inventory_rules = result["module_configs"]["inventory"]["field_rules"]
+        self.assertEqual(
+            inventory_rules["purchase_order_item.warehouse"],
+            {"visible": False, "required": False, "readonly": True},
+        )

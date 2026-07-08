@@ -98,7 +98,8 @@ class ProductViewSet(BaseBusinessViewSet):
         # 1. Duplication check
         errors = check_duplicate_product(
             self.request.data.get('name'),
-            self.request.data.get('barcode')
+            self.request.data.get('barcode'),
+            tenant=self.request.user.tenant
         )
         if errors:
             from rest_framework.exceptions import ValidationError
@@ -111,6 +112,19 @@ class ProductViewSet(BaseBusinessViewSet):
             **build_erp_tenant_save_kwargs(Product, user=self.request.user),
             **build_erp_user_and_dept_kwargs(Product, user=self.request.user),
         )
+
+    def perform_update(self, serializer):
+        errors = check_duplicate_product(
+            self.request.data.get('name', serializer.instance.name),
+            self.request.data.get('barcode', serializer.instance.barcode),
+            exclude_id=serializer.instance.id,
+            tenant=self.request.user.tenant,
+        )
+        if errors:
+            raise ValidationError({"detail": errors})
+
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
+        serializer.save()
 
     def perform_destroy(self, instance):
         # Prevent deletion if product is in use
@@ -222,7 +236,7 @@ class InventoryViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少必要参数"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            product = Product.objects.get(id=product_id)
+            product = Product.objects.get(id=product_id, tenant=request.user.tenant, is_deleted=False)
             InventoryService.change_stock(
                 warehouse=warehouse_id,
                 product=product,

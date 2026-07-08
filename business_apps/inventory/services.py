@@ -440,10 +440,12 @@ def generate_warehouse_code():
     """Generates a stable warehouse code such as WH0001."""
     return CodeRuleService.generate('WAREHOUSE_CODE')
 
-def check_duplicate_product(name, barcode=None, exclude_id=None):
+def check_duplicate_product(name, barcode=None, exclude_id=None, tenant=None):
     """Checks if a product already exists with same name or barcode"""
     from .models import Product
     q = Product.objects.filter(is_deleted=False)
+    if tenant:
+        q = q.filter(tenant=tenant)
     if exclude_id:
         q = q.exclude(id=exclude_id)
         

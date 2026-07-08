@@ -1,10 +1,10 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Count, Sum, Q
 from django.db.models.functions import TruncMonth
-from core_apps.common.viewsets import BaseBusinessViewSet
+from core_apps.common.viewsets import BaseBusinessViewSet, ModuleAwareModelViewSet, build_erp_tenant_save_kwargs, validate_erp_related_tenant_scope
 from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.erp_auth.compat import build_erp_user_and_dept_kwargs, build_erp_user_fk_kwargs
 from core_apps.erp_auth.models import ERPUser
@@ -42,7 +42,8 @@ class SupplierViewSet(BaseBusinessViewSet):
             self.request.data.get('supplier_name'),
             self.request.data.get('tax_number'),
             self.request.data.get('contact_phone'),
-            self.request.data.get('email')
+            self.request.data.get('email'),
+            tenant=self.request.user.tenant
         )
         if errors:
             from rest_framework.exceptions import ValidationError
@@ -59,6 +60,7 @@ class SupplierViewSet(BaseBusinessViewSet):
             supplier_code=supplier_code,
             status='INACTIVE' if policy.approval_enabled() else serializer.validated_data.get('status', 'ACTIVE'),
             owner=self.request.user if isinstance(self.request.user, ERPUser) else None,
+            **build_erp_tenant_save_kwargs(Supplier, user=self.request.user),
             **build_erp_user_and_dept_kwargs(Supplier, user=self.request.user, user_field="created_by"),
         )
 
@@ -69,11 +71,13 @@ class SupplierViewSet(BaseBusinessViewSet):
             self.request.data.get('contact_phone', serializer.instance.contact_phone),
             self.request.data.get('email', serializer.instance.email),
             exclude_id=serializer.instance.id,
+            tenant=self.request.user.tenant
         )
         if errors:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({"detail": errors})
 
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -202,12 +206,12 @@ class SupplierViewSet(BaseBusinessViewSet):
             'by_month': by_month,
         })
 
-class SupplierContactViewSet(viewsets.ModelViewSet):
+class SupplierContactViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = SupplierContact.objects.all()
     serializer_class = SupplierContactSerializer
 
-class SupplierFollowRecordViewSet(viewsets.ModelViewSet):
+class SupplierFollowRecordViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = SupplierFollowRecord.objects.all()
     serializer_class = SupplierFollowRecordSerializer
@@ -217,7 +221,9 @@ class SupplierFollowRecordViewSet(viewsets.ModelViewSet):
         if supplier.status == 'BLACKLIST':
             from rest_framework.exceptions import ValidationError
             raise ValidationError("黑名单供应商禁止跟进")
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(
+            **build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user),
             **build_erp_user_fk_kwargs(
                 SupplierFollowRecord,
                 user=self.request.user,
@@ -225,7 +231,7 @@ class SupplierFollowRecordViewSet(viewsets.ModelViewSet):
             ),
         )
 
-class SupplierEvaluationViewSet(viewsets.ModelViewSet):
+class SupplierEvaluationViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = SupplierEvaluation.objects.all()
     serializer_class = SupplierEvaluationSerializer
@@ -236,7 +242,9 @@ class SupplierEvaluationViewSet(viewsets.ModelViewSet):
         if not policy.rating_enabled():
             from rest_framework.exceptions import ValidationError
             raise ValidationError("当前配置未启用供应商评级")
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(
+            **build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user),
             **build_erp_user_fk_kwargs(
                 SupplierEvaluation,
                 user=self.request.user,
@@ -244,12 +252,12 @@ class SupplierEvaluationViewSet(viewsets.ModelViewSet):
             ),
         )
 
-class SupplierTagViewSet(viewsets.ModelViewSet):
+class SupplierTagViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = SupplierTag.objects.all()
     serializer_class = SupplierTagSerializer
 
-class SupplierAttachmentViewSet(viewsets.ModelViewSet):
+class SupplierAttachmentViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = SupplierAttachment.objects.all()
     serializer_class = SupplierAttachmentSerializer
@@ -259,7 +267,9 @@ class SupplierAttachmentViewSet(viewsets.ModelViewSet):
         if not policy.attachment_enabled():
             from rest_framework.exceptions import ValidationError
             raise ValidationError("当前配置未启用供应商附件")
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(
+            **build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user),
             **build_erp_user_fk_kwargs(
                 SupplierAttachment,
                 user=self.request.user,

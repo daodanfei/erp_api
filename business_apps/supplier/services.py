@@ -8,9 +8,11 @@ def generate_supplier_code():
     """Generates a code in format SUP2026050001"""
     return CodeRuleService.generate('SUPPLIER_CODE')
 
-def check_duplicate_supplier(name, tax_number=None, phone=None, email=None, exclude_id=None):
+def check_duplicate_supplier(name, tax_number=None, phone=None, email=None, exclude_id=None, tenant=None):
     """Checks if a supplier already exists with same name, tax number, phone or email"""
     q = Supplier.objects.filter(is_deleted=False)
+    if tenant:
+        q = q.filter(tenant=tenant)
     if exclude_id:
         q = q.exclude(id=exclude_id)
         

@@ -507,6 +507,17 @@ class ERPAuthApiTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertNotEqual(response.data["refresh"], login_response.data["refresh"])
+
+        second_response = self.client.post(
+            "/api/erp-auth/refresh/",
+            {"refresh": response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", second_response.data)
 
     def test_runtime_config_accepts_erp_token(self):
         login_response = self.client.post(
@@ -1020,6 +1031,18 @@ class ERPUserMasterDataApiTest(APITestCase):
             blueprint_version=self.version,
         )
         self.erp_user = bind_result.initial_admin.user
+        self.other_tenant = Tenant.objects.create(
+            code="erp-masterdata-tenant-2",
+            name="ERP MasterData Tenant 2",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        other_bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.other_tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        self.other_erp_user = other_bind_result.initial_admin.user
         self.client.force_authenticate(self.erp_user)
 
     def test_erp_user_can_create_customer_follow_record_and_attachment_with_erp_owner(self):
@@ -1179,6 +1202,83 @@ class ERPUserMasterDataApiTest(APITestCase):
         supplier.refresh_from_db()
         self.assertEqual(customer.owner_id, target_user.id)
         self.assertEqual(supplier.owner_id, target_user.id)
+
+    def test_erp_user_cannot_access_or_create_other_tenant_master_data(self):
+        other_customer = Customer.objects.create(
+            tenant=self.other_tenant,
+            customer_code="CUS-OTHER-001",
+            customer_name="其他租户客户",
+            status="ACTIVE",
+            owner=self.other_erp_user,
+        )
+        other_supplier = Supplier.objects.create(
+            tenant=self.other_tenant,
+            supplier_code="SUP-OTHER-001",
+            supplier_name="其他租户供应商",
+            status="ACTIVE",
+            owner=self.other_erp_user,
+        )
+
+        customer_detail = self.client.get(f"/api/crm/customers/{other_customer.id}/")
+        supplier_detail = self.client.get(f"/api/supplier/suppliers/{other_supplier.id}/")
+        self.assertEqual(customer_detail.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(supplier_detail.status_code, status.HTTP_404_NOT_FOUND)
+
+        customer_follow = self.client.post(
+            "/api/crm/follow-records/",
+            {
+                "customer": other_customer.id,
+                "follow_type": "PHONE",
+                "content": "越权跟进",
+            },
+            format="json",
+        )
+        customer_attachment = self.client.post(
+            "/api/crm/attachments/",
+            {
+                "customer": other_customer.id,
+                "file_name": "cross-tenant.txt",
+                "file_url": "https://example.com/cross-tenant.txt",
+                "file_size": 1,
+            },
+            format="json",
+        )
+        supplier_follow = self.client.post(
+            "/api/supplier/follow-records/",
+            {
+                "supplier": other_supplier.id,
+                "follow_type": "PHONE",
+                "content": "越权跟进",
+            },
+            format="json",
+        )
+        supplier_evaluation = self.client.post(
+            "/api/supplier/evaluations/",
+            {
+                "supplier": other_supplier.id,
+                "quality_score": 5,
+                "delivery_score": 5,
+                "service_score": 5,
+                "price_score": 5,
+            },
+            format="json",
+        )
+        supplier_attachment = self.client.post(
+            "/api/supplier/attachments/",
+            {
+                "supplier": other_supplier.id,
+                "file_name": "cross-tenant.txt",
+                "file_url": "https://example.com/cross-tenant.txt",
+                "file_size": 1,
+            },
+            format="json",
+        )
+
+        self.assertEqual(customer_follow.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(customer_attachment.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(supplier_follow.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(supplier_evaluation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(supplier_attachment.status_code, status.HTTP_400_BAD_REQUEST)
 
 
 class ERPUserPurchaseAPFlowTest(TestCase):

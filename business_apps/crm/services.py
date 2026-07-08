@@ -10,9 +10,11 @@ def generate_customer_code():
     """Generates a code in format CUS2026050001"""
     return CodeRuleService.generate('CUSTOMER_CODE')
 
-def check_duplicate(name, phone=None, email=None, exclude_id=None):
+def check_duplicate(name, phone=None, email=None, exclude_id=None, tenant=None):
     """Checks if a customer already exists with same name, phone or email"""
     q = Customer.objects.filter(is_deleted=False)
+    if tenant:
+        q = q.filter(tenant=tenant)
     if exclude_id:
         q = q.exclude(id=exclude_id)
         

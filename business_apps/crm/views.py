@@ -1,10 +1,10 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Count, Sum
 from django.db.models.functions import TruncMonth
-from core_apps.common.viewsets import BaseBusinessViewSet
+from core_apps.common.viewsets import BaseBusinessViewSet, ModuleAwareModelViewSet, build_erp_tenant_save_kwargs, validate_erp_related_tenant_scope
 from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.erp_auth.compat import build_erp_user_and_dept_kwargs, build_erp_user_fk_kwargs
 from core_apps.erp_auth.models import ERPUser
@@ -43,7 +43,8 @@ class CustomerViewSet(BaseBusinessViewSet):
         errors = check_duplicate(
             self.request.data.get('customer_name'),
             self.request.data.get('phone'),
-            self.request.data.get('email')
+            self.request.data.get('email'),
+            tenant=self.request.user.tenant
         )
         if errors:
             from rest_framework.exceptions import ValidationError
@@ -65,6 +66,7 @@ class CustomerViewSet(BaseBusinessViewSet):
             customer_code=customer_code,
             status='INACTIVE' if policy.approval_enabled() else serializer.validated_data.get('status', 'ACTIVE'),
             owner=self.request.user if isinstance(self.request.user, ERPUser) else None,
+            **build_erp_tenant_save_kwargs(Customer, user=self.request.user),
             **extra_values,
             **build_erp_user_and_dept_kwargs(Customer, user=self.request.user, user_field="created_by"),
         )
@@ -76,6 +78,7 @@ class CustomerViewSet(BaseBusinessViewSet):
             self.request.data.get('phone', serializer.instance.phone),
             self.request.data.get('email', serializer.instance.email),
             exclude_id=serializer.instance.id,
+            tenant=self.request.user.tenant
         )
         if errors:
             from rest_framework.exceptions import ValidationError
@@ -85,6 +88,7 @@ class CustomerViewSet(BaseBusinessViewSet):
         if not policy.credit_limit_enabled():
             extra_values["credit_limit"] = 0
             extra_values["credit_control_mode"] = "NONE"
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(**extra_values)
 
     def perform_destroy(self, instance):
@@ -201,7 +205,7 @@ class CustomerViewSet(BaseBusinessViewSet):
             'by_month': by_month,
         })
 
-class ContactViewSet(viewsets.ModelViewSet):
+class ContactViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = Contact.objects.all()
     serializer_class = ContactSerializer
@@ -211,9 +215,10 @@ class ContactViewSet(viewsets.ModelViewSet):
         if customer.status == 'BLACKLIST':
             from rest_framework.exceptions import ValidationError
             raise ValidationError("黑名单客户禁止操作")
-        serializer.save()
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
+        serializer.save(**build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user))
 
-class FollowRecordViewSet(viewsets.ModelViewSet):
+class FollowRecordViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = FollowRecord.objects.all()
     serializer_class = FollowRecordSerializer
@@ -227,7 +232,9 @@ class FollowRecordViewSet(viewsets.ModelViewSet):
         if customer.status == 'BLACKLIST':
             from rest_framework.exceptions import ValidationError
             raise ValidationError("黑名单客户禁止跟进")
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(
+            **build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user),
             **build_erp_user_fk_kwargs(
                 FollowRecord,
                 user=self.request.user,
@@ -238,12 +245,12 @@ class FollowRecordViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         return Response({"detail": "跟进记录不可编辑"}, status=status.HTTP_403_FORBIDDEN)
 
-class CustomerTagViewSet(viewsets.ModelViewSet):
+class CustomerTagViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = CustomerTag.objects.all()
     serializer_class = CustomerTagSerializer
 
-class CustomerAttachmentViewSet(viewsets.ModelViewSet):
+class CustomerAttachmentViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = CustomerAttachment.objects.all()
     serializer_class = CustomerAttachmentSerializer
@@ -253,7 +260,9 @@ class CustomerAttachmentViewSet(viewsets.ModelViewSet):
         if not policy.attachment_enabled():
             from rest_framework.exceptions import ValidationError
             raise ValidationError("当前配置未启用客户附件")
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(
+            **build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user),
             **build_erp_user_fk_kwargs(
                 CustomerAttachment,
                 user=self.request.user,

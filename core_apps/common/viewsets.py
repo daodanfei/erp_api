@@ -61,11 +61,17 @@ def validate_erp_related_tenant_scope(model, *, validated_data: dict, user) -> N
     for field in model._meta.get_fields():
         if getattr(field, "auto_created", False) or not getattr(field, "is_relation", False):
             continue
-        if getattr(field, "many_to_many", False):
-            continue
         if field.name not in validated_data:
             continue
         related_obj = validated_data[field.name]
+        if getattr(field, "many_to_many", False):
+            invalid_related = [
+                obj for obj in related_obj
+                if getattr(obj, "tenant_id", None) is not None and getattr(obj, "tenant_id", None) != tenant.id
+            ]
+            if invalid_related:
+                raise ValidationError({field.name: "不能关联其他租户的数据"})
+            continue
         related_tenant_id = getattr(related_obj, "tenant_id", None)
         if related_tenant_id is not None and related_tenant_id != tenant.id:
             raise ValidationError({field.name: "不能关联其他租户的数据"})
@@ -82,6 +88,10 @@ class ModuleAwareModelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(**build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user))
+
+    def perform_update(self, serializer):
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
+        serializer.save()
 
 
 class ModuleAwareReadOnlyViewSet(viewsets.ReadOnlyModelViewSet):
@@ -131,3 +141,7 @@ class BaseBusinessViewSet(ModuleAwareModelViewSet):
             kwargs[self.dept_field] = self.request.user.dept
             
         serializer.save(**kwargs)
+
+    def perform_update(self, serializer):
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
+        serializer.save()

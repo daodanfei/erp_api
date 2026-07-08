@@ -54,10 +54,11 @@ class ProductCategorySerializer(serializers.ModelSerializer):
 
 class ProductCategoryTreeSerializer(serializers.ModelSerializer):
     children = serializers.SerializerMethodField()
+    parent_name = serializers.CharField(source='parent.name', read_only=True)
 
     class Meta:
         model = ProductCategory
-        fields = ['id', 'name', 'parent', 'sort', 'status', 'remark', 'children']
+        fields = ['id', 'name', 'parent', 'parent_name', 'sort', 'status', 'remark', 'children']
 
     def get_children(self, obj):
         children = obj.children.all().order_by('sort', 'id')

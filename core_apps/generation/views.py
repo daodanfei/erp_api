@@ -49,7 +49,7 @@ class GenerationJobViewSet(
         result = GenerationService.retry_generation_job(
             source_job=job,
             requested_by=request.user,
-            instance_name=request.data.get("instance_name", job.instance.name if job.instance_id else ""),
+            instance_name=request.data.get("instance_name", (job.payload_json or {}).get("instance_name", "")),
             tenant=tenant,
             tenant_name=request.data.get("tenant_name", (job.payload_json or {}).get("tenant_name", "")),
             industry=request.data.get("industry", (job.payload_json or {}).get("industry", "")),
@@ -63,7 +63,7 @@ class GenerationJobViewSet(
     @action(detail=True, methods=["get"], url_path="download")
     def download(self, request, pk=None):
         job = self.get_object()
-        artifact_path = job.artifact_path or job.instance.artifact_path
+        artifact_path = job.artifact_path or (job.instance.artifact_path if job.instance_id else "")
         if not artifact_path:
             raise Http404("当前任务没有可下载产物")
         try:
@@ -136,7 +136,7 @@ class CreateSaasGenerationView(APIView):
             tenant_name=serializer.validated_data.get("tenant_name", ""),
             industry=serializer.validated_data.get("industry", ""),
         )
-        tenant = result.instance.tenant
+        tenant = result.tenant
         snapshot = tenant.active_config_snapshot if tenant is not None else None
         module_states = tenant.module_states.order_by("module_key") if tenant is not None else []
         payload = result.to_dict()

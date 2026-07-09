@@ -206,7 +206,6 @@ class ERPMeView(APIView):
                     "id": user.tenant.id,
                     "code": user.tenant.code,
                     "name": user.tenant.name,
-                    "instance_id": user.tenant.instance_id,
                 },
                 "role_codes": list(user.roles.filter(status=True).values_list("code", flat=True)),
                 "permissions": sorted(set(code for code in permissions_qs if code)),

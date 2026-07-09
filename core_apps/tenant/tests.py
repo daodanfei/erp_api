@@ -216,7 +216,7 @@ class TenantApiTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["tenant"]["code"], "tenant-c")
-        self.assertEqual(response.data["instance"]["name"], "Tenant C SaaS")
+        self.assertIsNone(response.data["instance"])
         self.assertEqual(response.data["blueprint"]["key"], self.blueprint.key)
         self.assertEqual(response.data["blueprint_version"]["version"], self.version.version)
 

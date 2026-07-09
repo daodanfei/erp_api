@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from core_apps.blueprints.models import GenerationJob, SystemBlueprintVersion, SystemInstance
 from core_apps.blueprints.serializers import GenerationJobSerializer, SystemInstanceSerializer
-from core_apps.blueprints.services import GenerationJobService, SystemInstanceService
+from core_apps.blueprints.services import GenerationJobService
 from core_apps.tenant.models import Tenant, TenantModuleState
 from core_apps.tenant.serializers import TenantConfigSnapshotSerializer, TenantModuleStateSerializer, TenantSerializer
 from core_apps.tenant.services import TenantService, generate_tenant_code
@@ -19,13 +19,15 @@ from .validators import validate_blueprint_version_for_generation
 
 @dataclass(frozen=True, slots=True)
 class GenerationExecutionResult:
-    instance: SystemInstance
+    instance: SystemInstance | None
+    tenant: Tenant | None
     job: GenerationJob
     plan: GenerationPlan
 
     def to_dict(self) -> dict:
         return {
             "instance": SystemInstanceSerializer(self.instance).data if self.instance is not None else None,
+            "tenant": TenantSerializer(self.tenant).data if self.tenant is not None else None,
             "generation_job": GenerationJobSerializer(self.job).data,
             "plan": self.plan.to_dict(),
         }
@@ -100,7 +102,6 @@ class GenerationService:
             blueprint_version,
             runtime_mode=runtime_mode,
         )
-        instance = None
         resolved_instance_name = instance_name or f"{blueprint_version.blueprint.name} {runtime_mode}"
         resolved_tenant_name = tenant.name if tenant is not None else tenant_name
         resolved_tenant_code = (
@@ -138,6 +139,7 @@ class GenerationService:
                 result = GenerationService._execute_saas(
                     job=job,
                     blueprint_version=blueprint_version,
+                    plan=plan,
                     instance_name=resolved_instance_name,
                     tenant=tenant,
                     tenant_code=resolved_tenant_code,
@@ -146,33 +148,17 @@ class GenerationService:
                     requested_by=requested_by,
                 )
             else:
-                instance = SystemInstanceService.create_instance(
-                    blueprint=blueprint_version.blueprint,
-                    blueprint_version=blueprint_version,
-                    name=resolved_instance_name,
-                    mode=runtime_mode,
-                    status="GENERATING",
-                    tenant=None,
-                    created_by=requested_by,
-                )
-                GenerationJobService.attach_instance(job, instance=instance)
                 result = GenerationService._execute_code_export(
-                    instance=instance,
                     job=job,
                     blueprint_version=blueprint_version,
                     plan=plan,
                 )
         except Exception as exc:
-            if instance is None and job.instance_id:
-                instance = job.instance
-            if instance is not None:
-                instance.status = "FAILED"
-                instance.save(update_fields=["status"])
             GenerationJobService.append_log(job, stage="FAILED", level="ERROR", message=str(exc))
             GenerationJobService.mark_failed(job, stage="FAILED", error_message=str(exc))
             raise
 
-        return GenerationExecutionResult(instance=result.instance, job=result.job, plan=plan)
+        return GenerationExecutionResult(instance=result.instance, tenant=result.tenant, job=result.job, plan=plan)
 
     @staticmethod
     def retry_generation(*, source_job: GenerationJob, requested_by) -> GenerationExecutionResult:
@@ -180,7 +166,7 @@ class GenerationService:
         return GenerationService.retry_generation_job(
             source_job=source_job,
             requested_by=requested_by,
-            instance_name=payload.get("instance_name", source_job.instance.name if source_job.instance_id else ""),
+            instance_name=payload.get("instance_name", ""),
             tenant=Tenant.objects.filter(pk=payload.get("tenant_id")).first() if payload.get("tenant_id") else None,
             tenant_name=payload.get("tenant_name", ""),
             industry=payload.get("industry", ""),
@@ -197,15 +183,12 @@ class GenerationService:
         industry: str = "",
     ) -> GenerationExecutionResult:
         payload = source_job.payload_json or {}
-        runtime_mode = payload.get(
-            "runtime_mode",
-            source_job.instance.runtime_mode if source_job.instance_id else "SAAS",
-        )
+        runtime_mode = payload.get("runtime_mode", "SAAS")
         if runtime_mode == "SAAS":
             return GenerationService.create_saas_instance_from_version(
                 blueprint_version=source_job.blueprint_version,
                 requested_by=requested_by,
-                instance_name=instance_name or (source_job.instance.name if source_job.instance_id else ""),
+                instance_name=instance_name or payload.get("instance_name", ""),
                 tenant=tenant,
                 tenant_name=tenant_name,
                 industry=industry,
@@ -214,24 +197,25 @@ class GenerationService:
         return GenerationService.export_code_from_version(
             blueprint_version=source_job.blueprint_version,
             requested_by=requested_by,
-            instance_name=instance_name or (source_job.instance.name if source_job.instance_id else ""),
+            instance_name=instance_name or payload.get("instance_name", ""),
             retry_count=source_job.retry_count + 1,
         )
 
     @staticmethod
     def build_audit_payload(*, job: GenerationJob) -> dict:
-        runtime_mode = (
-            job.instance.runtime_mode
-            if job.instance_id
-            else (job.payload_json or {}).get("runtime_mode", "SAAS")
-        )
+        payload = job.payload_json or {}
+        result = job.result_json or {}
+        runtime_mode = payload.get("runtime_mode", "SAAS")
         plan = build_generation_plan(
             job.blueprint_version,
             normalized_config=job.config_snapshot_json or job.blueprint_version.config_json,
             runtime_mode=runtime_mode,
         )
+        tenant_id = result.get("tenant_id") or payload.get("tenant_id")
+        tenant = Tenant.objects.filter(pk=tenant_id).first() if tenant_id else None
         return {
             "job": GenerationJobSerializer(job).data,
+            "tenant": TenantSerializer(tenant).data if tenant is not None else None,
             "instance": SystemInstanceSerializer(job.instance).data if job.instance_id else None,
             "plan": plan.to_dict(),
         }
@@ -357,6 +341,7 @@ class GenerationService:
         *,
         job: GenerationJob,
         blueprint_version: SystemBlueprintVersion,
+        plan: GenerationPlan,
         instance_name: str,
         tenant: Tenant | None = None,
         tenant_code: str = "",
@@ -372,7 +357,7 @@ class GenerationService:
                 industry=industry,
                 owner=requested_by,
             )
-            GenerationJobService.append_log(job, stage="CREATING_INSTANCE", message="Tenant created, creating system instance.")
+            GenerationJobService.append_log(job, stage="PROVISIONING", message="Tenant created.")
         else:
             update_fields = []
             if tenant_name and tenant.name != tenant_name:
@@ -383,47 +368,26 @@ class GenerationService:
                 update_fields.append("industry")
             if update_fields:
                 tenant.save(update_fields=update_fields)
-            GenerationJobService.append_log(job, stage="CREATING_INSTANCE", message="Tenant selected, creating system instance.")
-        instance = SystemInstanceService.create_instance(
-            blueprint=blueprint_version.blueprint,
-            blueprint_version=blueprint_version,
-            name=instance_name,
-            mode="SAAS",
-            status="GENERATING",
-            tenant=tenant,
-            created_by=requested_by,
-        )
-        if tenant.instance_id != instance.id:
-            tenant.instance = instance
-            tenant.save(update_fields=["instance"])
-        GenerationJobService.attach_instance(job, instance=instance)
+            GenerationJobService.append_log(job, stage="PROVISIONING", message="Tenant selected.")
         GenerationJobService.append_log(job, stage="APPLYING_BLUEPRINT", message="Applying blueprint version to tenant.")
         snapshot = TenantService.apply_blueprint_version(tenant=tenant, blueprint_version=blueprint_version)
         module_states = tuple(TenantModuleState.objects.filter(tenant=tenant).order_by("module_key"))
-        instance.status = "ACTIVE"
-        instance.published_at = timezone.now()
-        instance.current_generation_job = job
-        instance.save(update_fields=["status", "published_at", "current_generation_job"])
-        GenerationJobService.append_log(job, stage="FINALIZING", message="SaaS instance is active.")
+        GenerationJobService.append_log(job, stage="FINALIZING", message="Tenant runtime is active.")
         job = GenerationJobService.mark_succeeded(
             job,
             job_stage="COMPLETED",
             result_json={
                 "tenant_id": tenant.id,
                 "snapshot_id": snapshot.id,
-                "instance_id": instance.id,
+                "instance_name": instance_name,
                 "enabled_modules": [state.module_key for state in module_states if state.enabled],
             },
         )
-        return GenerationExecutionResult(instance=instance, job=job, plan=GenerationService.preview_plan(
-            blueprint_version=blueprint_version,
-            runtime_mode="SAAS",
-        ))
+        return GenerationExecutionResult(instance=None, tenant=tenant, job=job, plan=plan)
 
     @staticmethod
     def _execute_code_export(
         *,
-        instance: SystemInstance,
         job: GenerationJob,
         blueprint_version: SystemBlueprintVersion,
         plan: GenerationPlan,
@@ -439,14 +403,6 @@ class GenerationService:
             },
             plan=plan,
         )
-        instance.status = "ACTIVE"
-        instance.artifact_path = artifact.artifact_path
-        instance.artifact_checksum = artifact.artifact_checksum
-        instance.published_at = timezone.now()
-        instance.current_generation_job = job
-        instance.save(
-            update_fields=["status", "artifact_path", "artifact_checksum", "published_at", "current_generation_job"]
-        )
         GenerationJobService.append_log(
             job,
             stage="FINALIZING",
@@ -460,11 +416,10 @@ class GenerationService:
             artifact_name=artifact.artifact_name,
             artifact_size=artifact.artifact_size,
             result_json={
-                "instance_id": instance.id,
                 "artifact_name": artifact.artifact_name,
                 "artifact_checksum": artifact.artifact_checksum,
                 "artifact_size": artifact.artifact_size,
                 "module_keys": list(plan.module_keys),
             },
         )
-        return GenerationExecutionResult(instance=instance, job=job, plan=plan)
+        return GenerationExecutionResult(instance=None, tenant=None, job=job, plan=plan)

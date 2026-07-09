@@ -8,7 +8,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from core_apps.authentication.models import User
-from core_apps.blueprints.models import GenerationJob, SystemBlueprint, SystemBlueprintVersion, SystemInstance
+from core_apps.blueprints.models import GenerationJob, SystemBlueprint, SystemBlueprintVersion
 from core_apps.tenant.models import Tenant
 from .planners import build_generation_plan
 
@@ -131,14 +131,11 @@ class GenerationApiTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         job = GenerationJob.objects.get(job_key=response.data["generation_job"]["job_key"])
-        instance = SystemInstance.objects.get(pk=response.data["instance"]["id"])
         self.assertEqual(job.status, "SUCCEEDED")
         self.assertEqual(job.job_stage, "COMPLETED")
         self.assertTrue(job.artifact_path.endswith(".zip"))
         self.assertGreater(job.artifact_size, 0)
-        self.assertEqual(instance.runtime_mode, "CODE_EXPORT")
-        self.assertEqual(instance.current_generation_job_id, job.id)
-        self.assertTrue(instance.artifact_checksum)
+        self.assertIsNone(response.data["instance"])
         self.assertIn("retained_frontend_modules", response.data["plan"]["export_manifest"])
         with zipfile.ZipFile(job.artifact_path) as archive:
             members = set(archive.namelist())
@@ -175,16 +172,14 @@ class GenerationApiTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         job = GenerationJob.objects.get(job_key=response.data["generation_job"]["job_key"])
-        instance = SystemInstance.objects.get(pk=response.data["instance"]["id"])
         tenant = Tenant.objects.get(pk=response.data["tenant"]["id"])
         self.assertEqual(job.status, "SUCCEEDED")
-        self.assertEqual(instance.tenant_id, tenant.id)
-        self.assertEqual(instance.runtime_mode, "SAAS")
+        self.assertIsNone(response.data["instance"])
         self.assertTrue(tenant.code.startswith("tenant-"))
         self.assertEqual(job.config_snapshot_json["basic"]["name"], "stage3_erp")
         self.assertEqual(
             [entry["stage"] for entry in job.job_logs_json],
-            ["VALIDATING", "PLANNING", "PROVISIONING", "CREATING_INSTANCE", "APPLYING_BLUEPRINT", "FINALIZING"],
+            ["VALIDATING", "PLANNING", "PROVISIONING", "PROVISIONING", "APPLYING_BLUEPRINT", "FINALIZING"],
         )
 
     def test_create_saas_job_allows_rebinding_existing_tenant_to_new_instance(self):
@@ -221,9 +216,10 @@ class GenerationApiTest(APITestCase):
 
         self.assertEqual(second_response.status_code, status.HTTP_201_CREATED)
         tenant.refresh_from_db()
-        self.assertEqual(tenant.instance_id, second_response.data["instance"]["id"])
+        self.assertIsNone(tenant.instance_id)
         self.assertEqual(second_response.data["tenant"]["id"], tenant.id)
-        self.assertEqual(second_response.data["instance"]["blueprint_version"], second_version.id)
+        self.assertIsNone(second_response.data["instance"])
+        self.assertEqual(tenant.active_blueprint_version.id, second_version.id)
 
     def test_retry_creates_new_job_with_incremented_retry_count(self):
         response = self.client.post(
@@ -271,10 +267,10 @@ class GenerationApiTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["job"]["status"], "SUCCEEDED")
-        self.assertEqual(response.data["instance"]["runtime_mode"], "CODE_EXPORT")
+        self.assertIsNone(response.data["instance"])
         self.assertIn("enabled_modules", response.data["plan"])
 
-    def test_instance_list_returns_generation_instances(self):
+    def test_instance_list_excludes_new_generation_results(self):
         create_response = self.client.post(
             "/api/generation/export-code/",
             {
@@ -287,87 +283,7 @@ class GenerationApiTest(APITestCase):
         response = self.client.get("/api/generation/instances/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]["id"], create_response.data["instance"]["id"])
-        self.assertEqual(response.data[0]["runtime_mode"], "CODE_EXPORT")
-
-    def test_instance_retrieve_returns_lifecycle_payload(self):
-        self.version.config_json = build_config(mode="saas")
-        self.version.save(update_fields=["config_json"])
-        create_response = self.client.post(
-            "/api/generation/create-saas/",
-            {
-                "blueprint_version": self.version.id,
-                "instance_name": "Lifecycle SaaS",
-                "tenant_name": "Lifecycle Tenant",
-            },
-            format="json",
-        )
-
-        response = self.client.get(f"/api/generation/instances/{create_response.data['instance']['id']}/")
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["instance"]["name"], "Lifecycle SaaS")
-        self.assertEqual(response.data["tenant"]["code"], "lifecycle-tenant")
-        self.assertIsNotNone(response.data["latest_job"])
-        self.assertIn("recent_jobs", response.data)
-
-    def test_instance_status_actions_update_instance_and_tenant(self):
-        self.version.config_json = build_config(mode="saas")
-        self.version.save(update_fields=["config_json"])
-        create_response = self.client.post(
-            "/api/generation/create-saas/",
-            {
-                "blueprint_version": self.version.id,
-                "instance_name": "Status SaaS",
-                "tenant_name": "Status Tenant",
-            },
-            format="json",
-        )
-        instance_id = create_response.data["instance"]["id"]
-
-        deactivate_response = self.client.post(f"/api/generation/instances/{instance_id}/deactivate/", {}, format="json")
-        self.assertEqual(deactivate_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(deactivate_response.data["status"], "INACTIVE")
-
-        reactivate_response = self.client.post(f"/api/generation/instances/{instance_id}/reactivate/", {}, format="json")
-        self.assertEqual(reactivate_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(reactivate_response.data["status"], "ACTIVE")
-
-        archive_response = self.client.post(f"/api/generation/instances/{instance_id}/archive/", {}, format="json")
-        self.assertEqual(archive_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(archive_response.data["status"], "ARCHIVED")
-
-    def test_reapply_blueprint_version_updates_instance_binding(self):
-        self.version.config_json = build_config(mode="saas")
-        self.version.save(update_fields=["config_json"])
-        create_response = self.client.post(
-            "/api/generation/create-saas/",
-            {
-                "blueprint_version": self.version.id,
-                "instance_name": "Reapply SaaS",
-                "tenant_name": "Reapply Tenant",
-            },
-            format="json",
-        )
-        new_version = SystemBlueprintVersion.objects.create(
-            blueprint=self.blueprint,
-            version="v2",
-            config_json=build_config(mode="saas"),
-            created_by=self.user,
-            is_published=True,
-        )
-
-        response = self.client.post(
-            f"/api/generation/instances/{create_response.data['instance']['id']}/reapply-version/",
-            {"blueprint_version": new_version.id},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        instance = SystemInstance.objects.get(pk=create_response.data["instance"]["id"])
-        self.assertEqual(instance.blueprint_version_id, new_version.id)
-        self.assertEqual(response.data["generation_job"]["status"], "SUCCEEDED")
+        self.assertEqual(len(response.data), 0)
 
     def test_export_registry_embeds_feature_pruning_contract(self):
         version = SystemBlueprintVersion.objects.create(

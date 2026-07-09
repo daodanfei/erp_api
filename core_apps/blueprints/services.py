@@ -39,7 +39,7 @@ def publish_blueprint_version(version: SystemBlueprintVersion) -> SystemBlueprin
 @dataclass(frozen=True, slots=True)
 class SaasInstanceCreationResult:
     tenant: Tenant
-    instance: SystemInstance
+    instance: SystemInstance | None
     generation_job: GenerationJob
     snapshot: TenantConfigSnapshot
     module_states: tuple[TenantModuleState, ...]
@@ -210,7 +210,7 @@ class SystemInstanceService:
             tenant_name=tenant_name,
             industry=industry,
         )
-        tenant = result.instance.tenant
+        tenant = result.tenant
         snapshot = tenant.active_config_snapshot
         module_states = tuple(tenant.module_states.order_by("module_key"))
         return SaasInstanceCreationResult(

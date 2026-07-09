@@ -1,7 +1,9 @@
 from rest_framework import serializers
+from django.db.models import OuterRef, Subquery
+from django.utils.text import slugify
 
 from core_apps.configuration import validate_blueprint_config
-from core_apps.tenant.models import Tenant
+from core_apps.tenant.models import Tenant, TenantConfigSnapshot
 
 from .models import GenerationJob, SystemBlueprint, SystemBlueprintVersion, SystemInstance
 from .services import BlueprintService
@@ -9,11 +11,61 @@ from .services import BlueprintService
 
 class BlueprintSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    blueprint_type = serializers.SerializerMethodField()
+    bound_tenants = serializers.SerializerMethodField()
 
     class Meta:
         model = SystemBlueprint
         fields = "__all__"
         read_only_fields = ("created_by", "created_at", "updated_at")
+        extra_kwargs = {
+            "key": {"required": False, "allow_blank": True},
+        }
+
+    def get_blueprint_type(self, obj):
+        version = obj.versions.order_by("-created_at", "-id").first()
+        if version is None:
+            return None
+        return version.config_json.get("basic", {}).get("mode")
+
+    def get_bound_tenants(self, obj):
+        active_snapshot_blueprint_subquery = TenantConfigSnapshot.objects.filter(
+            tenant=OuterRef("pk")
+        ).order_by("-applied_at", "-id").values("blueprint_version__blueprint_id")[:1]
+        tenants = Tenant.objects.annotate(
+            active_blueprint_id=Subquery(active_snapshot_blueprint_subquery)
+        ).filter(active_blueprint_id=obj.id).order_by("name", "id")
+        return [
+            {
+                "id": tenant.id,
+                "code": tenant.code,
+                "name": tenant.name,
+            }
+            for tenant in tenants
+        ]
+
+    def create(self, validated_data):
+        created_by = validated_data.pop("created_by", None)
+        key = (validated_data.get("key") or "").strip()
+        if not key:
+            key = self._generate_blueprint_key(validated_data.get("name", ""))
+        validated_data["key"] = key
+        return SystemBlueprint.objects.create(created_by=created_by, **validated_data)
+
+    def _generate_blueprint_key(self, name: str) -> str:
+        max_length = SystemBlueprint._meta.get_field("key").max_length or 100
+        base_key = slugify(name or "blueprint", allow_unicode=False).replace("_", "-").strip("-")
+        if not base_key:
+            base_key = "blueprint"
+        base_key = base_key[:max_length].rstrip("-") or "blueprint"
+        candidate = base_key
+        suffix = 2
+        while SystemBlueprint.objects.filter(key=candidate).exists():
+            suffix_text = f"-{suffix}"
+            trimmed_base = base_key[: max_length - len(suffix_text)].rstrip("-")
+            candidate = f"{trimmed_base}{suffix_text}" if trimmed_base else f"blueprint{suffix_text}"
+            suffix += 1
+        return candidate
 
 
 class BlueprintVersionSerializer(serializers.ModelSerializer):

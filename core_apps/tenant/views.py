@@ -4,7 +4,6 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 
 from core_apps.blueprints.models import SystemBlueprintVersion, SystemInstance
-from core_apps.blueprints.serializers import SystemInstanceSerializer
 from core_apps.common.permissions import PlatformUserOnly
 from core_apps.erp_auth.authentication import ERPJWTAuthentication
 from core_apps.erp_auth.models import ERPUser
@@ -22,10 +21,10 @@ from .services import TenantService, resolve_user_tenant
 
 
 class TenantViewSet(viewsets.ModelViewSet):
-    queryset = Tenant.objects.select_related("instance").all()
+    queryset = Tenant.objects.all()
     serializer_class = TenantSerializer
     permission_classes = [permissions.IsAuthenticated, PlatformUserOnly]
-    filterset_fields = ["code", "status", "industry", "instance"]
+    filterset_fields = ["code", "status", "industry"]
 
     def create(self, request, *args, **kwargs):
         tenant = TenantService.create_tenant(
@@ -75,7 +74,7 @@ class TenantViewSet(viewsets.ModelViewSet):
         return response.Response(
             {
                 "tenant": self.get_serializer(result.tenant).data,
-                "instance": SystemInstanceSerializer(result.instance).data,
+                "instance": None,
                 "snapshot": (
                     TenantConfigSnapshotSerializer(result.snapshot).data
                     if result.snapshot is not None
@@ -175,13 +174,6 @@ class RuntimeConfigView(APIView):
         snapshot = tenant.active_config_snapshot if tenant is not None else None
         blueprint_version = snapshot.blueprint_version if snapshot is not None else None
         blueprint = blueprint_version.blueprint if blueprint_version is not None else None
-        instance = tenant.instance if tenant is not None else None
-        if instance is None and tenant is not None:
-            instance = (
-                tenant.instances.select_related("blueprint", "blueprint_version", "current_generation_job")
-                .order_by("-published_at", "-created_at")
-                .first()
-            )
         return response.Response(
             {
                 "tenant": (
@@ -189,7 +181,7 @@ class RuntimeConfigView(APIView):
                     if tenant is not None
                     else None
                 ),
-                "instance": SystemInstanceSerializer(instance).data if instance is not None else None,
+                "instance": None,
                 "blueprint": (
                     {"id": blueprint.id, "key": blueprint.key, "name": blueprint.name}
                     if blueprint is not None
@@ -199,7 +191,7 @@ class RuntimeConfigView(APIView):
                     {
                         "id": blueprint_version.id,
                         "version": blueprint_version.version,
-                        "published_at": instance.published_at if instance is not None else None,
+                        "published_at": snapshot.applied_at if snapshot is not None else None,
                     }
                     if blueprint_version is not None
                     else None

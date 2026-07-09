@@ -38,6 +38,7 @@ class GenerationPlanPreviewSerializer(serializers.Serializer):
         validation = validate_blueprint_version_for_generation(
             blueprint_version=attrs["blueprint_version"],
             runtime_mode=attrs.get("runtime_mode"),
+            require_published=False,
         )
         attrs["normalized_config"] = validation.normalized_config
         attrs["runtime_mode"] = validation.runtime_mode or resolve_runtime_mode(validation.normalized_config)
@@ -46,5 +47,6 @@ class GenerationPlanPreviewSerializer(serializers.Serializer):
 
 class GenerationJobAuditSerializer(serializers.Serializer):
     job = GenerationJobSerializer()
-    instance = SystemInstanceSerializer()
+    instance = SystemInstanceSerializer(allow_null=True)
+    tenant = serializers.DictField(required=False, allow_null=True)
     plan = serializers.DictField()

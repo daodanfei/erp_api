@@ -535,7 +535,7 @@ class ERPAuthApiTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["tenant"]["code"], self.tenant.code)
-        self.assertEqual(response.data["instance"]["id"], self.instance.id)
+        self.assertIsNone(response.data["instance"])
 
 
 class ERPUserManagementApiTest(APITestCase):

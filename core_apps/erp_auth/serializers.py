@@ -263,13 +263,10 @@ class ERPLoginSerializer(serializers.Serializer):
 
         tenant = (
             Tenant.objects.filter(code=attrs["tenant_code"], status="ACTIVE")
-            .select_related("instance")
             .first()
         )
         if tenant is None:
             raise serializers.ValidationError("租户不存在或已停用")
-        if tenant.instance_id is None:
-            raise serializers.ValidationError("当前租户尚未绑定实例")
         user = (
             ERPUser.objects.select_related("tenant")
             .prefetch_related("roles")

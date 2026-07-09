@@ -8,7 +8,7 @@ from core_apps.authentication.models import User
 from core_apps.tenant.models import Tenant, TenantConfigSnapshot, TenantModuleState, TenantUser
 from core_apps.tenant.services import build_runtime_config, resolve_user_tenant
 
-from .models import GenerationJob, SystemBlueprint, SystemBlueprintVersion, SystemInstance
+from .models import GenerationJob, SystemBlueprint, SystemBlueprintVersion
 from .services import BlueprintService, SystemInstanceService, get_next_blueprint_version, publish_blueprint_version
 
 
@@ -143,8 +143,7 @@ class BlueprintServiceTest(TestCase):
         )
 
         self.assertEqual(result.tenant.code, "blueprint-saas")
-        self.assertEqual(result.instance.mode, "SAAS")
-        self.assertEqual(result.instance.tenant_id, result.tenant.id)
+        self.assertIsNone(result.instance)
         self.assertEqual(result.generation_job.job_type, "CREATE_SAAS")
         self.assertEqual(result.generation_job.status, "SUCCEEDED")
         self.assertEqual(result.snapshot.tenant_id, result.tenant.id)
@@ -234,7 +233,7 @@ class BlueprintApiTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("版本号不能重复", str(response.data))
 
-    def test_generation_create_saas_endpoint_returns_tenant_instance_and_job(self):
+    def test_generation_create_saas_endpoint_returns_tenant_and_job(self):
         version = SystemBlueprintVersion.objects.create(
             blueprint=self.blueprint,
             version="v1",
@@ -270,15 +269,14 @@ class BlueprintApiTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["tenant"]["code"], "bp-api-tenant")
-        self.assertEqual(response.data["instance"]["mode"], "SAAS")
+        self.assertIsNone(response.data["instance"])
         self.assertEqual(response.data["generation_job"]["job_type"], "CREATE_SAAS")
         self.assertEqual(response.data["generation_job"]["status"], "SUCCEEDED")
         self.assertEqual(
-            SystemInstance.objects.filter(blueprint_version=version, tenant__code=response.data["tenant"]["code"]).count(),
-            1,
-        )
-        self.assertEqual(
-            GenerationJob.objects.filter(blueprint_version=version, instance__tenant__code=response.data["tenant"]["code"]).count(),
+            GenerationJob.objects.filter(
+                blueprint_version=version,
+                result_json__tenant_id=response.data["tenant"]["id"],
+            ).count(),
             1,
         )
         self.assertEqual(

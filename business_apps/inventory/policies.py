@@ -81,4 +81,9 @@ class InventoryPolicy(BasePolicy):
     def _load_warehouse(self, value):
         if isinstance(value, Warehouse):
             return value
-        return Warehouse.objects.get(id=value)
+        queryset = Warehouse.objects.all()
+        if self.user is not None:
+            from core_apps.common.viewsets import apply_erp_tenant_scope
+
+            queryset = apply_erp_tenant_scope(queryset, user=self.user)
+        return queryset.get(id=value)

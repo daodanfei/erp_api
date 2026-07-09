@@ -12,6 +12,11 @@ from business_apps.purchase.models import PurchaseOrder, PurchaseReceipt, Purcha
 from business_apps.inventory.models import Product, Warehouse, Unit, ProductCategory
 from business_apps.finance.models import CashAccount
 from core_apps.authentication.models import User, Permission, Role
+from core_apps.blueprints.models import SystemBlueprint, SystemBlueprintVersion, SystemInstance
+from core_apps.erp_auth.models import ERPPermission, ERPRole
+from core_apps.erp_auth.models import ERPUser
+from core_apps.tenant.models import Tenant
+from core_apps.tenant.services import TenantService
 
 from business_apps.platform.models import CodeRule
 
@@ -276,38 +281,133 @@ class APServiceTest(TestCase):
 
 
 class APPaymentApiTest(APITestCase):
+    @staticmethod
+    def _build_config():
+        return {
+            "basic": {
+                "name": "ap_api",
+                "industry": "trade",
+                "mode": "saas",
+            },
+            "enabled_modules": ["ap_payable"],
+            "module_configs": {
+                "ap_payable": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
+            },
+        }
+
     def setUp(self):
         CodeRule.objects.create(rule_code='AP_ACCOUNT', prefix='AR', sequence_length=4, reset_type='DAY', status='ACTIVE')
         CodeRule.objects.create(rule_code='AP_PAYMENT', prefix='RC', sequence_length=4, reset_type='DAY', status='ACTIVE')
         CodeRule.objects.create(rule_code='AP_ALLOCATION', prefix='WO', sequence_length=4, reset_type='DAY', status='ACTIVE')
 
-        self.view_permission = Permission.objects.create(name='查看付款单', code='ap:payment:view', type='BUTTON')
-        self.create_permission = Permission.objects.create(name='创建付款单', code='ap:payment:create', type='BUTTON')
-        self.submit_permission = Permission.objects.create(name='提交付款单', code='ap:payment:submit', type='BUTTON')
-        self.approve_permission = Permission.objects.create(name='审核付款单', code='ap:payment:approve', type='BUTTON')
-        self.execute_permission = Permission.objects.create(name='执行付款单', code='ap:payment:execute', type='BUTTON')
-        self.account_view_permission = Permission.objects.create(name='查看应付统计', code='ap:account:view', type='BUTTON')
-        self.creator_role = Role.objects.create(name='应付创建人', code='ap_creator', data_scope='SELF')
+        self.platform_user = User.objects.create_user(username='ap_api_owner', password='password')
+        self.blueprint = SystemBlueprint.objects.create(
+            key='ap_api_bp',
+            name='AP API Blueprint',
+            created_by=self.platform_user,
+        )
+        self.version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version='v1',
+            config_json=self._build_config(),
+            created_by=self.platform_user,
+            is_published=True,
+        )
+        self.instance = SystemInstance.objects.create(
+            blueprint=self.blueprint,
+            blueprint_version=self.version,
+            name='AP API Instance',
+            mode='SAAS',
+            runtime_mode='SAAS',
+            status='ACTIVE',
+            created_by=self.platform_user,
+        )
+        self.tenant = Tenant.objects.create(
+            code='ap-api-tenant',
+            name='AP API Tenant',
+            status='ACTIVE',
+            instance=self.instance,
+        )
+        bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        self.creator = bind_result.initial_admin.user
+
+        self.view_permission, _ = ERPPermission.objects.get_or_create(
+            code='ap:payment:view',
+            defaults={'name': '查看付款单', 'type': 'BUTTON'},
+        )
+        self.create_permission, _ = ERPPermission.objects.get_or_create(
+            code='ap:payment:create',
+            defaults={'name': '创建付款单', 'type': 'BUTTON'},
+        )
+        self.submit_permission, _ = ERPPermission.objects.get_or_create(
+            code='ap:payment:submit',
+            defaults={'name': '提交付款单', 'type': 'BUTTON'},
+        )
+        self.approve_permission, _ = ERPPermission.objects.get_or_create(
+            code='ap:payment:approve',
+            defaults={'name': '审核付款单', 'type': 'BUTTON'},
+        )
+        self.execute_permission, _ = ERPPermission.objects.get_or_create(
+            code='ap:payment:execute',
+            defaults={'name': '执行付款单', 'type': 'BUTTON'},
+        )
+        self.account_view_permission, _ = ERPPermission.objects.get_or_create(
+            code='ap:account:view',
+            defaults={'name': '查看应付统计', 'type': 'BUTTON'},
+        )
+
+        self.creator_role = ERPRole.objects.create(
+            tenant=self.tenant,
+            name='应付创建人',
+            code='ap_creator',
+            data_scope='SELF',
+            status=True,
+        )
         self.creator_role.permissions.add(
             self.view_permission,
             self.create_permission,
             self.submit_permission,
             self.account_view_permission,
         )
-        self.approver_role = Role.objects.create(name='应付审核员', code='ap_approver', data_scope='SELF')
+        self.approver_role = ERPRole.objects.create(
+            tenant=self.tenant,
+            name='应付审核员',
+            code='ap_approver',
+            data_scope='SELF',
+            status=True,
+        )
         self.approver_role.permissions.add(self.view_permission, self.approve_permission, self.account_view_permission)
-        self.executor_role = Role.objects.create(name='应付执行员', code='ap_executor', data_scope='SELF')
+        self.executor_role = ERPRole.objects.create(
+            tenant=self.tenant,
+            name='应付执行员',
+            code='ap_executor',
+            data_scope='SELF',
+            status=True,
+        )
         self.executor_role.permissions.add(self.view_permission, self.execute_permission, self.account_view_permission)
 
-        self.creator = User.objects.create_user(username='ap_creator', password='password')
         self.creator.roles.add(self.creator_role)
-        self.approver = User.objects.create_user(username='ap_approver', password='password')
+        self.approver = ERPUser.objects.create_user(tenant=self.tenant, username='ap_approver', password='password')
         self.approver.roles.add(self.approver_role)
-        self.executor = User.objects.create_user(username='ap_executor', password='password')
+        self.executor = ERPUser.objects.create_user(tenant=self.tenant, username='ap_executor', password='password')
         self.executor.roles.add(self.executor_role)
 
-        self.cash_account = CashAccount.objects.create(name='API Bank', type='BANK', current_balance=Decimal('1000.00'))
-        self.supplier = Supplier.objects.create(supplier_code='S-API-001', supplier_name='API Supplier', status='ACTIVE')
+        self.cash_account = CashAccount.objects.create(
+            tenant=self.tenant,
+            name='API Bank',
+            type='BANK',
+            current_balance=Decimal('1000.00'),
+        )
+        self.supplier = Supplier.objects.create(
+            tenant=self.tenant,
+            supplier_code='S-API-001',
+            supplier_name='API Supplier',
+            status='ACTIVE',
+        )
         self.payment = APService.create_payment(
             self.supplier,
             300,
@@ -368,3 +468,138 @@ class APPaymentApiTest(APITestCase):
         self.assertEqual(Decimal(str(response.data['total_balance'])), Decimal('400.00'))
         self.assertEqual(response.data['by_status']['PARTIAL'], 1)
         self.assertEqual(response.data['by_supplier'][0]['supplier__supplier_name'], ap.supplier.supplier_name)
+
+
+class APPaymentTenantScopeApiTest(APITestCase):
+    @staticmethod
+    def _build_config():
+        return {
+            "basic": {
+                "name": "ap_payment_scope",
+                "industry": "trade",
+                "mode": "saas",
+            },
+            "enabled_modules": ["ap_payable"],
+            "module_configs": {
+                "ap_payable": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
+            },
+        }
+
+    def setUp(self):
+        CodeRule.objects.create(rule_code='AP_PAYMENT', prefix='RC', sequence_length=4, reset_type='DAY', status='ACTIVE')
+
+        self.platform_user = User.objects.create_user(username='ap_scope_owner', password='password')
+        self.blueprint = SystemBlueprint.objects.create(
+            key='ap_scope_bp',
+            name='AP Scope Blueprint',
+            created_by=self.platform_user,
+        )
+        self.version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version='v1',
+            config_json=self._build_config(),
+            created_by=self.platform_user,
+            is_published=True,
+        )
+        self.instance = SystemInstance.objects.create(
+            blueprint=self.blueprint,
+            blueprint_version=self.version,
+            name='AP Scope Instance',
+            mode='SAAS',
+            runtime_mode='SAAS',
+            status='ACTIVE',
+            created_by=self.platform_user,
+        )
+
+        self.tenant = Tenant.objects.create(
+            code='ap-scope-tenant',
+            name='AP Scope Tenant',
+            status='ACTIVE',
+            instance=self.instance,
+        )
+        bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        self.erp_user = bind_result.initial_admin.user
+
+        payment_view, _ = ERPPermission.objects.get_or_create(
+            code='ap:payment:view',
+            defaults={'name': '查看付款单', 'type': 'BUTTON'},
+        )
+        payment_create, _ = ERPPermission.objects.get_or_create(
+            code='ap:payment:create',
+            defaults={'name': '创建付款单', 'type': 'BUTTON'},
+        )
+        role = ERPRole.objects.create(
+            tenant=self.tenant,
+            name='AP Payment Operator',
+            code='ap_payment_operator',
+            data_scope='SELF',
+            status=True,
+        )
+        role.permissions.add(payment_view, payment_create)
+        self.erp_user.roles.add(role)
+        self.client.force_authenticate(self.erp_user)
+
+        self.supplier = Supplier.objects.create(
+            tenant=self.tenant,
+            supplier_code='SUP-AP-SCOPE-001',
+            supplier_name='Tenant Supplier',
+            status='ACTIVE',
+            payment_term='NET_30',
+            created_by=self.erp_user,
+        )
+
+        self.other_tenant = Tenant.objects.create(
+            code='ap-scope-other',
+            name='AP Scope Other',
+            status='ACTIVE',
+            instance=self.instance,
+        )
+        self.other_supplier = Supplier.objects.create(
+            tenant=self.other_tenant,
+            supplier_code='SUP-AP-SCOPE-002',
+            supplier_name='Other Tenant Supplier',
+            status='ACTIVE',
+            payment_term='NET_30',
+        )
+
+    def test_created_payment_is_listed_in_current_tenant(self):
+        create_response = self.client.post(
+            '/api/ap-payable/payments/',
+            {
+                'supplier': self.supplier.id,
+                'payment_amount': '120.00',
+                'payment_date': timezone.now().date().isoformat(),
+                'payment_method': 'BANK_TRANSFER',
+            },
+            format='json',
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_response.data['tenant'], self.tenant.id)
+
+        list_response = self.client.get('/api/ap-payable/payments/')
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        rows = list_response.data if isinstance(list_response.data, list) else list_response.data.get('results', [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['id'], create_response.data['id'])
+        self.assertEqual(rows[0]['tenant'], self.tenant.id)
+
+    def test_create_rejects_cross_tenant_supplier(self):
+        response = self.client.post(
+            '/api/ap-payable/payments/',
+            {
+                'supplier': self.other_supplier.id,
+                'payment_amount': '88.00',
+                'payment_date': timezone.now().date().isoformat(),
+                'payment_method': 'BANK_TRANSFER',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('当前租户', response.data['detail'])

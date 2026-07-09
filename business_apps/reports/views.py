@@ -4,6 +4,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.shortcuts import get_object_or_404
 from core_apps.common.permissions import ERPActionPermission
 from core_apps.policies.registry import get_policy
 from .services import (
@@ -348,12 +349,9 @@ class ExportTaskDetailView(ReportFeatureAPIView):
     permission_map = {'get': 'reports:export:view'}
 
     def get(self, request, task_id):
-        try:
-            task = ReportExportTask.objects.get(id=task_id, created_by=request.user)
-            serializer = ReportExportTaskSerializer(task)
-            return Response(serializer.data)
-        except ReportExportTask.DoesNotExist:
-            return Response({"detail": "任务不存在"}, status=status.HTTP_404_NOT_FOUND)
+        task = get_object_or_404(ReportExportTask, id=task_id, created_by=request.user)
+        serializer = ReportExportTaskSerializer(task)
+        return Response(serializer.data)
 
 
 class ExportTaskListView(ReportFeatureAPIView):

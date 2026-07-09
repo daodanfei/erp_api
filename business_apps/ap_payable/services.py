@@ -11,6 +11,7 @@ from core_apps.erp_auth.compat import (
     build_erp_user_fk_kwargs,
     get_erp_user_id,
 )
+from core_apps.common.viewsets import apply_erp_tenant_scope
 from core_apps.policies.registry import get_policy
 
 class APService:
@@ -353,14 +354,14 @@ class APService:
         return amount
 
     @staticmethod
-    def get_statistics(start_date=None, end_date=None):
+    def get_statistics(user=None, start_date=None, end_date=None):
         base_q = Q()
         if start_date:
             base_q &= Q(created_at__date__gte=start_date)
         if end_date:
             base_q &= Q(created_at__date__lte=end_date)
 
-        accounts = APAccount.objects.filter(base_q, is_deleted=False).exclude(status='CANCELLED')
+        accounts = apply_erp_tenant_scope(APAccount.objects.all(), user=user).filter(base_q, is_deleted=False).exclude(status='CANCELLED')
         by_supplier = list(
             accounts.values('supplier__supplier_name').annotate(
                 count=Count('id'),
@@ -375,7 +376,7 @@ class APService:
         total_amount = accounts.aggregate(total=Sum('total_amount'))['total'] or Decimal('0')
         total_paid = accounts.aggregate(total=Sum('paid_amount'))['total'] or Decimal('0')
         total_balance = accounts.aggregate(total=Sum(F('total_amount') - F('paid_amount')))['total'] or Decimal('0')
-        executed_payments = APPayment.objects.filter(base_q, executed_at__isnull=False)
+        executed_payments = apply_erp_tenant_scope(APPayment.objects.all(), user=user).filter(base_q, executed_at__isnull=False)
         total_executed_payments = executed_payments.aggregate(total=Sum('payment_amount'))['total'] or Decimal('0')
 
         return {
@@ -389,9 +390,9 @@ class APService:
         }
 
     @staticmethod
-    def get_aging_analysis(supplier_id=None):
+    def get_aging_analysis(user=None, supplier_id=None):
         today = timezone.now().date()
-        qs = APAccount.objects.filter(is_deleted=False).exclude(status='PAID')
+        qs = apply_erp_tenant_scope(APAccount.objects.all(), user=user).filter(is_deleted=False).exclude(status='PAID')
         if supplier_id:
             qs = qs.filter(supplier_id=supplier_id)
             
@@ -423,9 +424,9 @@ class APService:
         return analysis
 
     @staticmethod
-    def get_supplier_summary():
+    def get_supplier_summary(user=None):
         # Aggregated stats per supplier
-        return APAccount.objects.filter(is_deleted=False).values('supplier__supplier_name').annotate(
+        return apply_erp_tenant_scope(APAccount.objects.all(), user=user).filter(is_deleted=False).values('supplier__supplier_name').annotate(
             total_ap=Sum('total_amount'),
             total_paid=Sum('paid_amount'),
             balance=Sum(F('total_amount') - F('paid_amount')),

@@ -4,6 +4,9 @@ from django.db import migrations
 def add_missing_tenant_columns(apps, schema_editor):
     Tenant = apps.get_model("tenant", "Tenant")
     table_name = Tenant._meta.db_table
+    existing_tables = set(schema_editor.connection.introspection.table_names())
+    if table_name not in existing_tables:
+        return
     existing_columns = {
         column.name
         for column in schema_editor.connection.introspection.get_table_description(

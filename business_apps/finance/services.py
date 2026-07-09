@@ -6,32 +6,38 @@ from datetime import timedelta
 from business_apps.ar_receivable.models import Receivable, Receipt, WriteOff
 from business_apps.ap_payable.models import APAccount, APPayment, APAllocation
 from .models import CashAccount, FinancialSnapshot
+from core_apps.common.viewsets import apply_erp_tenant_scope
 
 class FinanceStatsService:
     @staticmethod
-    def get_dashboard_kpis():
+    def get_dashboard_kpis(user):
         today = timezone.now().date()
         month_start = today.replace(day=1)
+        receivables = apply_erp_tenant_scope(Receivable.objects.all(), user=user)
+        receipts = apply_erp_tenant_scope(Receipt.objects.all(), user=user)
+        accounts = apply_erp_tenant_scope(APAccount.objects.all(), user=user)
+        payments = apply_erp_tenant_scope(APPayment.objects.all(), user=user)
+        cash_accounts = apply_erp_tenant_scope(CashAccount.objects.all(), user=user)
         
         # AR/AP Balances
-        total_ar = Receivable.objects.filter(is_deleted=False).exclude(status='PAID').aggregate(
+        total_ar = receivables.filter(is_deleted=False).exclude(status='PAID').aggregate(
             bal=Sum(F('amount') - F('written_off_amount'))
         )['bal'] or Decimal('0')
         
-        total_ap = APAccount.objects.filter(is_deleted=False).exclude(status='PAID').aggregate(
+        total_ap = accounts.filter(is_deleted=False).exclude(status='PAID').aggregate(
             bal=Sum(F('total_amount') - F('paid_amount'))
         )['bal'] or Decimal('0')
         
         # Cash
-        total_cash = CashAccount.objects.filter(status=True).aggregate(total=Sum('current_balance'))['total'] or Decimal('0')
+        total_cash = cash_accounts.filter(status=True).aggregate(total=Sum('current_balance'))['total'] or Decimal('0')
         
         # Daily flow
-        today_receipts = Receipt.objects.filter(executed_at__date=today, is_deleted=False).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-        today_payments = APPayment.objects.filter(executed_at__date=today).aggregate(total=Sum('payment_amount'))['total'] or Decimal('0')
+        today_receipts = receipts.filter(executed_at__date=today, is_deleted=False).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        today_payments = payments.filter(executed_at__date=today).aggregate(total=Sum('payment_amount'))['total'] or Decimal('0')
         
         # Monthly flow
-        month_receipts = Receipt.objects.filter(executed_at__date__gte=month_start, is_deleted=False).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-        month_payments = APPayment.objects.filter(executed_at__date__gte=month_start).aggregate(total=Sum('payment_amount'))['total'] or Decimal('0')
+        month_receipts = receipts.filter(executed_at__date__gte=month_start, is_deleted=False).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        month_payments = payments.filter(executed_at__date__gte=month_start).aggregate(total=Sum('payment_amount'))['total'] or Decimal('0')
 
         return {
             'total_ar': total_ar,
@@ -44,13 +50,15 @@ class FinanceStatsService:
         }
 
     @staticmethod
-    def get_cash_flow_trend(days=30):
+    def get_cash_flow_trend(user, days=30):
         today = timezone.now().date()
+        receipts_qs = apply_erp_tenant_scope(Receipt.objects.all(), user=user)
+        payments_qs = apply_erp_tenant_scope(APPayment.objects.all(), user=user)
         trend = []
         for i in range(days):
             date = today - timedelta(days=i)
-            receipts = Receipt.objects.filter(executed_at__date=date, is_deleted=False).aggregate(total=Sum('amount'))['total'] or 0
-            payments = APPayment.objects.filter(executed_at__date=date).aggregate(total=Sum('payment_amount'))['total'] or 0
+            receipts = receipts_qs.filter(executed_at__date=date, is_deleted=False).aggregate(total=Sum('amount'))['total'] or 0
+            payments = payments_qs.filter(executed_at__date=date).aggregate(total=Sum('payment_amount'))['total'] or 0
             trend.append({
                 'date': date.strftime('%Y-%m-%d'),
                 'inflow': receipts,
@@ -60,13 +68,13 @@ class FinanceStatsService:
         return trend[::-1] # Chronological
 
     @staticmethod
-    def get_aging_summary(type='AR'):
+    def get_aging_summary(user, type='AR'):
         today = timezone.now().date()
         if type == 'AR':
-            qs = Receivable.objects.filter(is_deleted=False).exclude(status='PAID')
+            qs = apply_erp_tenant_scope(Receivable.objects.all(), user=user).filter(is_deleted=False).exclude(status='PAID')
             amount_expr = F('amount') - F('written_off_amount')
         else:
-            qs = APAccount.objects.filter(is_deleted=False).exclude(status='PAID')
+            qs = apply_erp_tenant_scope(APAccount.objects.all(), user=user).filter(is_deleted=False).exclude(status='PAID')
             amount_expr = F('total_amount') - F('paid_amount')
 
         buckets = {
@@ -86,7 +94,7 @@ class ReconciliationService:
         return parsed
 
     @staticmethod
-    def get_customer_statement(customer_id, start_date, end_date):
+    def get_customer_statement(user, customer_id, start_date, end_date):
         """
         Calculates statement from AR and write-off details:
         Opening + New AR - Write-offs = Closing.
@@ -94,14 +102,16 @@ class ReconciliationService:
         from business_apps.crm.models import Customer
         start_date = ReconciliationService._parse_date(start_date, "开始日期")
         end_date = ReconciliationService._parse_date(end_date, "结束日期")
-        customer = Customer.objects.get(id=customer_id)
+        customer = apply_erp_tenant_scope(Customer.objects.all(), user=user).get(id=customer_id)
         
-        old_ar = Receivable.objects.filter(customer_id=customer_id, created_at__date__lt=start_date, is_deleted=False).aggregate(total=Sum('amount'))['total'] or 0
-        old_write_offs = WriteOff.objects.filter(receivable__customer_id=customer_id, write_off_date__lt=start_date).aggregate(total=Sum('amount'))['total'] or 0
+        receivables = apply_erp_tenant_scope(Receivable.objects.all(), user=user)
+        writeoffs = apply_erp_tenant_scope(WriteOff.objects.all(), user=user)
+        old_ar = receivables.filter(customer_id=customer_id, created_at__date__lt=start_date, is_deleted=False).aggregate(total=Sum('amount'))['total'] or 0
+        old_write_offs = writeoffs.filter(receivable__customer_id=customer_id, write_off_date__lt=start_date).aggregate(total=Sum('amount'))['total'] or 0
         opening_balance = old_ar - old_write_offs
         
-        period_ar = Receivable.objects.filter(customer_id=customer_id, created_at__date__gte=start_date, created_at__date__lte=end_date, is_deleted=False)
-        period_write_offs = WriteOff.objects.filter(receivable__customer_id=customer_id, write_off_date__gte=start_date, write_off_date__lte=end_date)
+        period_ar = receivables.filter(customer_id=customer_id, created_at__date__gte=start_date, created_at__date__lte=end_date, is_deleted=False)
+        period_write_offs = writeoffs.filter(receivable__customer_id=customer_id, write_off_date__gte=start_date, write_off_date__lte=end_date)
         
         total_new_ar = period_ar.aggregate(total=Sum('amount'))['total'] or 0
         total_write_offs = period_write_offs.aggregate(total=Sum('amount'))['total'] or 0
@@ -142,7 +152,7 @@ class ReconciliationService:
         }
 
     @staticmethod
-    def get_supplier_statement(supplier_id, start_date, end_date):
+    def get_supplier_statement(user, supplier_id, start_date, end_date):
         """
         Calculates statement from AP and allocation details:
         Opening + New AP - Payment allocations = Closing.
@@ -150,14 +160,16 @@ class ReconciliationService:
         from business_apps.supplier.models import Supplier
         start_date = ReconciliationService._parse_date(start_date, "开始日期")
         end_date = ReconciliationService._parse_date(end_date, "结束日期")
-        supplier = Supplier.objects.get(id=supplier_id)
+        supplier = apply_erp_tenant_scope(Supplier.objects.all(), user=user).get(id=supplier_id)
 
-        old_ap = APAccount.objects.filter(supplier_id=supplier_id, created_at__date__lt=start_date, is_deleted=False).aggregate(total=Sum('total_amount'))['total'] or 0
-        old_allocations = APAllocation.objects.filter(ap_account__supplier_id=supplier_id, created_at__date__lt=start_date).aggregate(total=Sum('amount'))['total'] or 0
+        accounts = apply_erp_tenant_scope(APAccount.objects.all(), user=user)
+        allocations = apply_erp_tenant_scope(APAllocation.objects.all(), user=user)
+        old_ap = accounts.filter(supplier_id=supplier_id, created_at__date__lt=start_date, is_deleted=False).aggregate(total=Sum('total_amount'))['total'] or 0
+        old_allocations = allocations.filter(ap_account__supplier_id=supplier_id, created_at__date__lt=start_date).aggregate(total=Sum('amount'))['total'] or 0
         opening_balance = old_ap - old_allocations
 
-        period_ap = APAccount.objects.filter(supplier_id=supplier_id, created_at__date__gte=start_date, created_at__date__lte=end_date, is_deleted=False)
-        period_allocations = APAllocation.objects.filter(ap_account__supplier_id=supplier_id, created_at__date__gte=start_date, created_at__date__lte=end_date)
+        period_ap = accounts.filter(supplier_id=supplier_id, created_at__date__gte=start_date, created_at__date__lte=end_date, is_deleted=False)
+        period_allocations = allocations.filter(ap_account__supplier_id=supplier_id, created_at__date__gte=start_date, created_at__date__lte=end_date)
 
         total_new_ap = period_ap.aggregate(total=Sum('total_amount'))['total'] or 0
         total_allocations = period_allocations.aggregate(total=Sum('amount'))['total'] or 0

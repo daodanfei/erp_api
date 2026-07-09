@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.core.exceptions import ObjectDoesNotExist
 from django_filters.rest_framework import DjangoFilterBackend
 from core_apps.common.viewsets import BaseBusinessViewSet
 from .models import PurchaseOrder, PurchaseOrderItem, PurchaseReceipt, PurchaseAttachment
@@ -12,7 +13,7 @@ from .serializers import (
 from .services import PurchaseOrderService
 from .filters import PurchaseOrderFilter, PurchaseReceiptFilter
 from business_apps.supplier.models import Supplier
-from business_apps.inventory.models import Product
+from business_apps.inventory.models import Product, Warehouse
 
 MODULE_KEY = "purchase"
 
@@ -57,11 +58,11 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少供应商或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            supplier = Supplier.objects.get(id=supplier_id)
+            supplier = self.get_scoped_related_object(Supplier.objects.filter(is_deleted=False), id=supplier_id)
             processed_items = []
             for item in items_data:
                 processed_items.append({
-                    'product': Product.objects.get(id=item['product']),
+                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
                     'warehouse': item.get('warehouse'),
                     'quantity': item['quantity'],
                     'unit_price': item['unit_price'],
@@ -73,6 +74,8 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -87,14 +90,14 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             remark = request.data.get('remark')
             expected_arrival_date = request.data.get('expected_arrival_date')
 
-            supplier = Supplier.objects.get(id=supplier_id) if supplier_id else None
+            supplier = self.get_scoped_related_object(Supplier.objects.filter(is_deleted=False), id=supplier_id) if supplier_id else None
 
             processed_items = None
             if items_data is not None:
                 processed_items = []
                 for item in items_data:
                     processed_items.append({
-                        'product': Product.objects.get(id=item['product']),
+                        'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
                         'warehouse': item.get('warehouse'),
                         'quantity': item['quantity'],
                         'unit_price': item['unit_price'],
@@ -106,6 +109,8 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -223,19 +228,22 @@ class PurchaseReceiptViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少采购订单或入库明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            order = PurchaseOrder.objects.get(id=po_id)
+            order = self.get_scoped_related_object(PurchaseOrder.objects.all(), id=po_id)
             processed_items = []
             for item in items_data:
-                po_item = PurchaseOrderItem.objects.get(id=item['purchase_order_item'])
+                po_item = self.get_scoped_related_object(PurchaseOrderItem.objects.all(), id=item['purchase_order_item'])
                 processed_items.append({
                     'purchase_order_item': po_item,
                     'received_quantity': item['received_quantity'],
                     'remark': item.get('remark', ''),
                 })
 
-            receipt = PurchaseOrderService.create_receipt(order, warehouse_id, processed_items, request.user, remark)
+            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
+            receipt = PurchaseOrderService.create_receipt(order, warehouse, processed_items, request.user, remark)
             serializer = self.get_serializer(receipt)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

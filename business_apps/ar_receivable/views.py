@@ -1,10 +1,11 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from core_apps.common.viewsets import BaseBusinessViewSet
+from core_apps.common.viewsets import BaseBusinessViewSet, ModuleAwareReadOnlyViewSet
 from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.erp_auth.compat import as_erp_user
 from django.db.models import Q
+from django.core.exceptions import ObjectDoesNotExist
 from .models import Receivable, Receipt, WriteOff
 from .serializers import ReceivableSerializer, ReceiptSerializer, WriteOffSerializer
 from .services import ARService
@@ -39,10 +40,12 @@ class ReceivableViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少销售订单ID"}, status=status.HTTP_400_BAD_REQUEST)
             
         try:
-            order = SalesOrder.objects.get(id=order_id)
+            order = self.get_scoped_related_object(SalesOrder.objects.all(), id=order_id)
             receivable = ARService.generate_ar_from_order(order, request.user)
             serializer = self.get_serializer(receivable)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -52,7 +55,7 @@ class ReceivableViewSet(BaseBusinessViewSet):
         if not policy.overdue_tracking_enabled():
             return Response({"detail": "当前配置未启用应收逾期跟踪"}, status=status.HTTP_400_BAD_REQUEST)
         customer_id = request.query_params.get('customer')
-        analysis = ARService.get_aging_analysis(customer_id)
+        analysis = ARService.get_aging_analysis(request.user, customer_id)
         return Response(analysis)
 
 class ReceiptViewSet(BaseBusinessViewSet):
@@ -73,9 +76,11 @@ class ReceiptViewSet(BaseBusinessViewSet):
     }
 
     def get_queryset(self):
-        queryset = self.queryset
+        queryset = self.get_tenant_scoped_queryset()
         user = self.request.user
         scope_q = get_data_scope_filter(user, dept_field=self.dept_field, user_field=self.user_field)
+        if not scope_q.children:
+            return queryset.distinct()
         visible_q = scope_q
         erp_user = as_erp_user(user)
 
@@ -111,7 +116,7 @@ class ReceiptViewSet(BaseBusinessViewSet):
 
     def create(self, request, *args, **kwargs):
         try:
-            customer = Customer.objects.get(id=request.data.get('customer'))
+            customer = self.get_scoped_related_object(Customer.objects.all(), id=request.data.get('customer'))
             amount = float(request.data.get('amount'))
             receipt_date = request.data.get('receipt_date')
             payment_method = request.data.get('payment_method')
@@ -121,13 +126,18 @@ class ReceiptViewSet(BaseBusinessViewSet):
                 amount=amount,
                 receipt_date=receipt_date,
                 payment_method=payment_method,
-                cash_account=CashAccount.objects.get(id=request.data.get('cash_account')) if request.data.get('cash_account') else None,
+                cash_account=(
+                    self.get_scoped_related_object(CashAccount.objects.all(), id=request.data.get('cash_account'))
+                    if request.data.get('cash_account') else None
+                ),
                 operator=request.user,
                 reference_no=request.data.get('reference_no'),
                 remark=request.data.get('remark')
             )
             serializer = self.get_serializer(receipt)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -156,16 +166,19 @@ class ReceiptViewSet(BaseBusinessViewSet):
         amount = float(request.data.get('amount', 0))
         
         try:
-            receivable, receipt = ARService.write_off(receivable_id, receipt_id, amount, request.user)
+            receipt = self.get_scoped_related_object(Receipt.objects.all(), id=receipt_id)
+            receivable = self.get_scoped_related_object(Receivable.objects.all(), id=receivable_id)
+            receivable, receipt = ARService.write_off(receivable.id, receipt.id, amount, request.user)
             return Response({"status": "success", "detail": "核销成功"})
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-class WriteOffViewSet(viewsets.ReadOnlyModelViewSet):
+class WriteOffViewSet(ModuleAwareReadOnlyViewSet):
     module_key = "ar_receivable"
     queryset = WriteOff.objects.all()
     serializer_class = WriteOffSerializer
-    permission_classes = [permissions.IsAuthenticated]
     filterset_fields = ['receivable', 'receipt']
 
     def get_queryset(self):

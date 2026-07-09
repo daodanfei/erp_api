@@ -81,9 +81,18 @@ class ModuleAwareModelViewSet(viewsets.ModelViewSet):
     permission_classes = [ERPUserOnly, ModuleEnabledPermission, ERPActionPermission]
     module_key = ""
 
-    def get_queryset(self):
+    def get_tenant_scoped_queryset(self):
         queryset = super().get_queryset()
         return apply_erp_tenant_scope(queryset, user=self.request.user)
+
+    def get_scoped_related_queryset(self, queryset):
+        return apply_erp_tenant_scope(queryset, user=self.request.user)
+
+    def get_scoped_related_object(self, queryset, **lookup):
+        return self.get_scoped_related_queryset(queryset).get(**lookup)
+
+    def get_queryset(self):
+        return self.get_tenant_scoped_queryset()
 
     def perform_create(self, serializer):
         validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
@@ -98,9 +107,18 @@ class ModuleAwareReadOnlyViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [ERPUserOnly, ModuleEnabledPermission, ERPActionPermission]
     module_key = ""
 
-    def get_queryset(self):
+    def get_tenant_scoped_queryset(self):
         queryset = super().get_queryset()
         return apply_erp_tenant_scope(queryset, user=self.request.user)
+
+    def get_scoped_related_queryset(self, queryset):
+        return apply_erp_tenant_scope(queryset, user=self.request.user)
+
+    def get_scoped_related_object(self, queryset, **lookup):
+        return self.get_scoped_related_queryset(queryset).get(**lookup)
+
+    def get_queryset(self):
+        return self.get_tenant_scoped_queryset()
 
 
 class BaseBusinessViewSet(ModuleAwareModelViewSet):
@@ -112,7 +130,7 @@ class BaseBusinessViewSet(ModuleAwareModelViewSet):
     user_field = 'created_by'
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = self.get_tenant_scoped_queryset()
         user = self.request.user
         if getattr(user, "is_superuser", False):
             return queryset

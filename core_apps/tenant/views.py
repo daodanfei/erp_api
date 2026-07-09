@@ -1,6 +1,7 @@
 from rest_framework import decorators, permissions, response, status, viewsets
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
 
 from core_apps.blueprints.models import SystemBlueprintVersion, SystemInstance
 from core_apps.blueprints.serializers import SystemInstanceSerializer
@@ -40,14 +41,14 @@ class TenantViewSet(viewsets.ModelViewSet):
     @decorators.action(detail=True, methods=["post"], url_path="apply-version")
     def apply_version(self, request, pk=None):
         tenant = self.get_object()
-        blueprint_version = SystemBlueprintVersion.objects.get(pk=request.data["blueprint_version"])
+        blueprint_version = get_object_or_404(SystemBlueprintVersion, pk=request.data["blueprint_version"])
         snapshot = TenantService.apply_blueprint_version(tenant=tenant, blueprint_version=blueprint_version)
         serializer = TenantConfigSnapshotSerializer(snapshot)
         return response.Response(serializer.data)
 
     @decorators.action(detail=False, methods=["post"], url_path="create-from-version")
     def create_from_version(self, request):
-        blueprint_version = SystemBlueprintVersion.objects.get(pk=request.data["blueprint_version"])
+        blueprint_version = get_object_or_404(SystemBlueprintVersion, pk=request.data["blueprint_version"])
         tenant = TenantService.create_from_blueprint_version(
             code=request.data.get("code", ""),
             name=request.data["name"],
@@ -62,10 +63,10 @@ class TenantViewSet(viewsets.ModelViewSet):
     @decorators.action(detail=True, methods=["post"], url_path="bind-instance")
     def bind_instance(self, request, pk=None):
         tenant = self.get_object()
-        instance = SystemInstance.objects.select_related("blueprint_version").get(pk=request.data["instance"])
+        instance = get_object_or_404(SystemInstance.objects.select_related("blueprint_version"), pk=request.data["instance"])
         blueprint_version = None
         if request.data.get("blueprint_version"):
-            blueprint_version = SystemBlueprintVersion.objects.get(pk=request.data["blueprint_version"])
+            blueprint_version = get_object_or_404(SystemBlueprintVersion, pk=request.data["blueprint_version"])
         result = TenantService.bind_instance_to_tenant(
             tenant=tenant,
             instance=instance,

@@ -1,11 +1,11 @@
-from rest_framework import viewsets, status
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from core_apps.common.viewsets import BaseBusinessViewSet
-from core_apps.common.permissions import ERPActionPermission
+from core_apps.common.viewsets import BaseBusinessViewSet, ModuleAwareModelViewSet
 from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.erp_auth.compat import as_erp_user
 from django.db.models import Q
+from django.core.exceptions import ObjectDoesNotExist
 from .models import APAccount, APPayment, APAllocation
 from .serializers import APAccountSerializer, APPaymentSerializer, APAllocationSerializer
 from .services import APService
@@ -36,17 +36,17 @@ class APAccountViewSet(BaseBusinessViewSet):
     def statistics(self, request):
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
-        return Response(APService.get_statistics(start_date, end_date))
+        return Response(APService.get_statistics(request.user, start_date, end_date))
 
     @action(detail=False, methods=['get'])
     def supplier_summary(self, request):
-        summary = APService.get_supplier_summary()
+        summary = APService.get_supplier_summary(request.user)
         return Response(summary)
 
     @action(detail=False, methods=['get'])
     def aging(self, request):
         supplier_id = request.query_params.get('supplier')
-        analysis = APService.get_aging_analysis(supplier_id)
+        analysis = APService.get_aging_analysis(request.user, supplier_id)
         return Response(analysis)
 
 class APPaymentViewSet(BaseBusinessViewSet):
@@ -68,9 +68,11 @@ class APPaymentViewSet(BaseBusinessViewSet):
     }
 
     def get_queryset(self):
-        queryset = self.queryset
+        queryset = self.get_tenant_scoped_queryset()
         user = self.request.user
         scope_q = get_data_scope_filter(user, dept_field=self.dept_field, user_field=self.user_field)
+        if not scope_q.children:
+            return queryset.distinct()
         visible_q = scope_q
         erp_user = as_erp_user(user)
 
@@ -95,19 +97,24 @@ class APPaymentViewSet(BaseBusinessViewSet):
 
     def create(self, request, *args, **kwargs):
         try:
-            supplier = Supplier.objects.get(id=request.data.get('supplier'))
+            supplier = self.get_scoped_related_object(Supplier.objects.all(), id=request.data.get('supplier'))
             payment = APService.create_payment(
                 supplier=supplier,
                 amount=float(request.data.get('payment_amount')),
                 payment_date=request.data.get('payment_date'),
                 payment_method=request.data.get('payment_method'),
-                cash_account=CashAccount.objects.get(id=request.data.get('cash_account')) if request.data.get('cash_account') else None,
+                cash_account=(
+                    self.get_scoped_related_object(CashAccount.objects.all(), id=request.data.get('cash_account'))
+                    if request.data.get('cash_account') else None
+                ),
                 operator=request.user,
                 bank_account=request.data.get('bank_account'),
                 remark=request.data.get('remark')
             )
             serializer = self.get_serializer(payment)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -138,11 +145,10 @@ class APPaymentViewSet(BaseBusinessViewSet):
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-class APAllocationViewSet(viewsets.ModelViewSet):
+class APAllocationViewSet(ModuleAwareModelViewSet):
     module_key = "ap_payable"
     queryset = APAllocation.objects.all()
     serializer_class = APAllocationSerializer
-    permission_classes = [ERPActionPermission]
     permission_map = {
         'list': 'ap:allocation:view',
         'retrieve': 'ap:allocation:view',
@@ -163,8 +169,10 @@ class APAllocationViewSet(viewsets.ModelViewSet):
         ap_accounts_data = request.data.get('allocations', []) # list of {ap_id, amount}
         
         try:
-            payment = APPayment.objects.get(id=payment_id)
+            payment = self.get_scoped_related_object(APPayment.objects.all(), id=payment_id)
             APService.allocate_payment(payment, ap_accounts_data, request.user)
             return Response({"status": "success"})
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)

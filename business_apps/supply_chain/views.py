@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.core.exceptions import ObjectDoesNotExist
 from django_filters.rest_framework import DjangoFilterBackend
 from core_apps.common.viewsets import BaseBusinessViewSet
 from core_apps.common.permissions import ERPActionPermission
@@ -55,16 +56,16 @@ class OutboundOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少仓库或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            warehouse = Warehouse.objects.get(id=warehouse_id)
+            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
             sales_order = None
             if request.data.get('sales_order'):
                 from business_apps.sales.models import SalesOrder
-                sales_order = SalesOrder.objects.get(id=request.data['sales_order'])
+                sales_order = self.get_scoped_related_object(SalesOrder.objects.all(), id=request.data['sales_order'])
 
             processed_items = []
             for item in items_data:
                 processed_items.append({
-                    'product': Product.objects.get(id=item['product']),
+                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
                     'quantity': item['quantity'],
                     'remark': item.get('remark', ''),
                 })
@@ -75,6 +76,8 @@ class OutboundOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -151,13 +154,22 @@ class TransferOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少仓库或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            from_wh = Warehouse.objects.get(id=from_wh_id)
-            to_wh = Warehouse.objects.get(id=to_wh_id)
-            processed_items = [{'product': Product.objects.get(id=i['product']), 'quantity': i['quantity'], 'remark': i.get('remark', '')} for i in items_data]
+            from_wh = self.get_scoped_related_object(Warehouse.objects.all(), id=from_wh_id)
+            to_wh = self.get_scoped_related_object(Warehouse.objects.all(), id=to_wh_id)
+            processed_items = [
+                {
+                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=i['product']),
+                    'quantity': i['quantity'],
+                    'remark': i.get('remark', ''),
+                }
+                for i in items_data
+            ]
 
             order = TransferService.create_order(from_wh, to_wh, processed_items, request.user, remark=request.data.get('remark'))
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -171,11 +183,11 @@ class TransferOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少仓库或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            from_wh = Warehouse.objects.get(id=from_wh_id)
-            to_wh = Warehouse.objects.get(id=to_wh_id)
+            from_wh = self.get_scoped_related_object(Warehouse.objects.all(), id=from_wh_id)
+            to_wh = self.get_scoped_related_object(Warehouse.objects.all(), id=to_wh_id)
             processed_items = [
                 {
-                    'product': Product.objects.get(id=i['product']),
+                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=i['product']),
                     'quantity': i['quantity'],
                     'remark': i.get('remark', ''),
                 }
@@ -191,6 +203,8 @@ class TransferOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -272,14 +286,21 @@ class SalesReturnOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少仓库或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            warehouse = Warehouse.objects.get(id=warehouse_id)
-            customer = Customer.objects.get(id=request.data['customer']) if request.data.get('customer') else None
+            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
+            customer = self.get_scoped_related_object(Customer.objects.filter(is_deleted=False), id=request.data['customer']) if request.data.get('customer') else None
             sales_order = None
             if request.data.get('sales_order'):
                 from business_apps.sales.models import SalesOrder
-                sales_order = SalesOrder.objects.get(id=request.data['sales_order'])
+                sales_order = self.get_scoped_related_object(SalesOrder.objects.all(), id=request.data['sales_order'])
 
-            processed_items = [{'product': Product.objects.get(id=i['product']), 'quantity': i['quantity'], 'remark': i.get('remark', '')} for i in items_data]
+            processed_items = [
+                {
+                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=i['product']),
+                    'quantity': i['quantity'],
+                    'remark': i.get('remark', ''),
+                }
+                for i in items_data
+            ]
 
             order = SalesReturnService.create_order(
                 customer, sales_order, warehouse, processed_items, request.user,
@@ -287,6 +308,8 @@ class SalesReturnOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -350,14 +373,21 @@ class PurchaseReturnOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少仓库或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            warehouse = Warehouse.objects.get(id=warehouse_id)
-            supplier = Supplier.objects.get(id=request.data['supplier']) if request.data.get('supplier') else None
+            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
+            supplier = self.get_scoped_related_object(Supplier.objects.filter(is_deleted=False), id=request.data['supplier']) if request.data.get('supplier') else None
             purchase_order = None
             if request.data.get('purchase_order'):
                 from business_apps.purchase.models import PurchaseOrder
-                purchase_order = PurchaseOrder.objects.get(id=request.data['purchase_order'])
+                purchase_order = self.get_scoped_related_object(PurchaseOrder.objects.all(), id=request.data['purchase_order'])
 
-            processed_items = [{'product': Product.objects.get(id=i['product']), 'quantity': i['quantity'], 'remark': i.get('remark', '')} for i in items_data]
+            processed_items = [
+                {
+                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=i['product']),
+                    'quantity': i['quantity'],
+                    'remark': i.get('remark', ''),
+                }
+                for i in items_data
+            ]
 
             order = PurchaseReturnService.create_order(
                 supplier, purchase_order, warehouse, processed_items, request.user,
@@ -365,6 +395,8 @@ class PurchaseReturnOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

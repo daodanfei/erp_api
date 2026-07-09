@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.core.exceptions import ObjectDoesNotExist
 from core_apps.common.viewsets import BaseBusinessViewSet
 from .models import SalesOrder, SalesOrderItem, Shipment, OrderApprovalLog, OrderAttachment
 from .serializers import SalesOrderSerializer, SalesOrderItemSerializer, ShipmentSerializer, OrderApprovalLogSerializer
@@ -44,12 +45,12 @@ class SalesOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少客户或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            customer = Customer.objects.get(id=customer_id)
+            customer = self.get_scoped_related_object(Customer.objects.all(), id=customer_id)
             # Resolve products
             processed_items = []
             for item in items_data:
                 processed_items.append({
-                    'product': Product.objects.get(id=item['product']),
+                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
                     'warehouse': item.get('warehouse'),
                     'quantity': item['quantity'],
                     'unit_price': item['unit_price'],
@@ -78,13 +79,13 @@ class SalesOrderViewSet(BaseBusinessViewSet):
             remark = request.data.get('remark')
             expected_delivery_date = request.data.get('expected_delivery_date')
 
-            customer = Customer.objects.get(id=customer_id) if customer_id else None
+            customer = self.get_scoped_related_object(Customer.objects.all(), id=customer_id) if customer_id else None
             processed_items = None
             if items_data is not None:
                 processed_items = []
                 for item in items_data:
                     processed_items.append({
-                        'product': Product.objects.get(id=item['product']),
+                        'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
                         'warehouse': item.get('warehouse'),
                         'quantity': item['quantity'],
                         'unit_price': item['unit_price'],
@@ -100,6 +101,8 @@ class SalesOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -150,13 +153,15 @@ class SalesOrderViewSet(BaseBusinessViewSet):
             processed_items = []
             for item in items_data:
                 processed_items.append({
-                    'order_item': SalesOrderItem.objects.get(id=item['order_item']),
+                    'order_item': self.get_scoped_related_object(SalesOrderItem.objects.all(), id=item['order_item']),
                     'quantity': item['quantity']
                 })
             
             outbound_orders = SalesOrderService.create_outbound_request(order, processed_items, request.user)
             serializer = OutboundOrderSerializer(outbound_orders, many=True)
             return Response(serializer.data)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

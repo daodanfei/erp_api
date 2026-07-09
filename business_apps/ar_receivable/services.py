@@ -10,6 +10,7 @@ from core_apps.erp_auth.compat import (
     build_erp_user_fk_kwargs,
     get_erp_user_id,
 )
+from core_apps.common.viewsets import apply_erp_tenant_scope
 from core_apps.policies.registry import get_policy
 
 class ARService:
@@ -331,12 +332,12 @@ class ARService:
         return receivable, receipt
 
     @staticmethod
-    def get_aging_analysis(customer_id=None):
+    def get_aging_analysis(user=None, customer_id=None):
         """Generate aging analysis for receivables"""
         from django.utils import timezone
         today = timezone.now().date()
         
-        qs = Receivable.objects.filter(is_deleted=False).exclude(status='PAID')
+        qs = apply_erp_tenant_scope(Receivable.objects.all(), user=user).filter(is_deleted=False).exclude(status='PAID')
         if customer_id:
             qs = qs.filter(customer_id=customer_id)
             

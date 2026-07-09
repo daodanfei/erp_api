@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
+from core_apps.common.viewsets import ModuleAwareModelViewSet, ModuleAwareReadOnlyViewSet
 from core_apps.common.permissions import ERPActionPermission
 from core_apps.policies.registry import get_policy
 
@@ -16,7 +17,7 @@ from .serializers import (
 from .services import PeriodService, SubjectInitService
 
 
-class AccountSubjectViewSet(viewsets.ModelViewSet):
+class AccountSubjectViewSet(ModuleAwareModelViewSet):
     module_key = "accounting"
     queryset = AccountSubject.objects.all()
     serializer_class = AccountSubjectSerializer
@@ -40,18 +41,18 @@ class AccountSubjectViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         policy = get_policy("accounting", user=self.request.user)
-        if not policy.subject_editable_after_init() and AccountSubject.objects.exists():
+        if not policy.subject_editable_after_init() and self.get_queryset().exists():
             raise ValidationError("当前配置不允许在科目初始化后修改会计科目")
         serializer.save()
 
     def perform_destroy(self, instance):
         policy = get_policy("accounting", user=self.request.user)
-        if not policy.subject_editable_after_init() and AccountSubject.objects.exists():
+        if not policy.subject_editable_after_init() and self.get_queryset().exists():
             raise ValidationError("当前配置不允许在科目初始化后删除会计科目")
         instance.delete()
 
 
-class AccountingPeriodViewSet(viewsets.ModelViewSet):
+class AccountingPeriodViewSet(ModuleAwareModelViewSet):
     module_key = "accounting"
     queryset = AccountingPeriod.objects.all()
     serializer_class = AccountingPeriodSerializer
@@ -79,7 +80,7 @@ class AccountingPeriodViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(period).data)
 
 
-class VoucherViewSet(viewsets.ReadOnlyModelViewSet):
+class VoucherViewSet(ModuleAwareReadOnlyViewSet):
     module_key = "accounting"
     queryset = Voucher.objects.prefetch_related("lines", "lines__subject").select_related("period", "posted_by")
     serializer_class = VoucherSerializer
@@ -91,7 +92,7 @@ class VoucherViewSet(viewsets.ReadOnlyModelViewSet):
     }
 
 
-class BusinessPostingLogViewSet(viewsets.ReadOnlyModelViewSet):
+class BusinessPostingLogViewSet(ModuleAwareReadOnlyViewSet):
     module_key = "accounting"
     queryset = BusinessPostingLog.objects.select_related("voucher", "created_by")
     serializer_class = BusinessPostingLogSerializer

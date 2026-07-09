@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.core.cache import cache
 import functools
 from core_apps.common.authz import has_erp_full_data_scope
+from core_apps.common.viewsets import apply_erp_tenant_scope
 
 
 def _cache_report(prefix, timeout=300):
@@ -85,6 +86,14 @@ def _apply_dept_filter(qs, user, dept_field='created_by__dept'):
         return qs.filter(created_by=user)
 
 
+def _tenant_qs(qs, user):
+    return apply_erp_tenant_scope(qs, user=user)
+
+
+def _tenant_and_dept_qs(qs, user, dept_field='created_by__dept'):
+    return _apply_dept_filter(_tenant_qs(qs, user), user, dept_field)
+
+
 class DashboardService:
     """经营驾驶舱"""
 
@@ -109,42 +118,42 @@ class DashboardService:
         from business_apps.supplier.models import Supplier
 
         # 销售额
-        sales_today = SalesOrder.objects.filter(
+        sales_today = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
             created_at__range=(today_start, today_end),
         ).aggregate(total=Coalesce(Sum('total_amount'), Decimal(0)))['total']
 
-        sales_month = SalesOrder.objects.filter(
+        sales_month = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
             created_at__range=(month_start_dt, today_end),
         ).aggregate(total=Coalesce(Sum('total_amount'), Decimal(0)))['total']
 
         # 采购额
-        purchase_today = PurchaseOrder.objects.filter(
+        purchase_today = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
             created_at__range=(today_start, today_end),
         ).aggregate(total=Coalesce(Sum('total_amount'), Decimal(0)))['total']
 
-        purchase_month = PurchaseOrder.objects.filter(
+        purchase_month = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
             created_at__range=(month_start_dt, today_end),
         ).aggregate(total=Coalesce(Sum('total_amount'), Decimal(0)))['total']
 
         # 库存总价值（聚合查询替代Python循环）
-        inv_value = Inventory.objects.select_related('product').aggregate(
+        inv_value = _tenant_qs(Inventory.objects.select_related('product'), user).aggregate(
             total_value=Coalesce(Sum(F('current_qty') * F('product__cost_price'), output_field=DecimalField()), Decimal(0))
         )['total_value']
 
         # 缺货/低库存统计（聚合查询）
-        out_of_stock = Inventory.objects.filter(current_qty=0).count()
-        low_stock = Inventory.objects.filter(
+        out_of_stock = _tenant_qs(Inventory.objects.all(), user).filter(current_qty=0).count()
+        low_stock = _tenant_qs(Inventory.objects.all(), user).filter(
             current_qty__gt=0, current_qty__lt=F('product__min_stock')
         ).count()
 
         # 统计数量
-        customer_count = Customer.objects.filter(is_deleted=False).count()
-        supplier_count = Supplier.objects.filter(is_deleted=False).count()
-        product_count = Product.objects.filter(is_deleted=False).count()
+        customer_count = _tenant_qs(Customer.objects.all(), user).filter(is_deleted=False).count()
+        supplier_count = _tenant_qs(Supplier.objects.all(), user).filter(is_deleted=False).count()
+        product_count = _tenant_qs(Product.objects.all(), user).filter(is_deleted=False).count()
 
         data = {
             'sales_today': str(sales_today),
@@ -167,7 +176,7 @@ class DashboardService:
         end = timezone.now()
         start = end - timedelta(days=days)
 
-        qs = SalesOrder.objects.filter(
+        qs = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
             created_at__range=(start, end),
         )
@@ -187,7 +196,7 @@ class DashboardService:
         end = timezone.now()
         start = end - timedelta(days=days)
 
-        qs = PurchaseOrder.objects.filter(
+        qs = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
             created_at__range=(start, end),
         )
@@ -204,15 +213,15 @@ class DashboardService:
         """库存概览"""
         from business_apps.inventory.models import Inventory
 
-        inventories = Inventory.objects.select_related('product')
+        inventories = _tenant_qs(Inventory.objects.select_related('product'), user)
 
         sku_count = inventories.count()
         agg = inventories.aggregate(
             total_qty=Coalesce(Sum('current_qty'), Decimal(0)),
             total_value=Coalesce(Sum(F('current_qty') * F('product__cost_price'), output_field=DecimalField()), Decimal(0)),
         )
-        out_of_stock = Inventory.objects.filter(current_qty=0).count()
-        low_stock = Inventory.objects.filter(
+        out_of_stock = _tenant_qs(Inventory.objects.all(), user).filter(current_qty=0).count()
+        low_stock = _tenant_qs(Inventory.objects.all(), user).filter(
             current_qty__gt=0, current_qty__lt=F('product__min_stock')
         ).count()
 
@@ -232,7 +241,7 @@ class DashboardService:
         from business_apps.purchase.models import PurchaseOrderItem, PurchaseOrder
 
         # 销售额Top10商品
-        valid_sales = SalesOrder.objects.filter(
+        valid_sales = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED']
         )
         product_top10 = SalesOrderItem.objects.filter(
@@ -242,17 +251,17 @@ class DashboardService:
         ).order_by('-total_amount')[:10]
 
         # 销售额Top10客户
-        customer_top10 = SalesOrder.objects.filter(
+        customer_top10 = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED']
         ).values('customer__customer_name').annotate(
             total_amount=Coalesce(Sum('total_amount'), Decimal(0)),
         ).order_by('-total_amount')[:10]
 
         # 采购额Top10供应商
-        valid_purchase = PurchaseOrder.objects.filter(
+        valid_purchase = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED']
         )
-        supplier_top10 = PurchaseOrder.objects.filter(
+        supplier_top10 = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED']
         ).values('supplier__supplier_name').annotate(
             total_amount=Coalesce(Sum('total_amount'), Decimal(0)),
@@ -276,7 +285,7 @@ class SalesReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        qs = _apply_dept_filter(
+        qs = _tenant_and_dept_qs(
             SalesOrder.objects.filter(
                 status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
                 created_at__range=(start, end),
@@ -298,7 +307,7 @@ class SalesReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        qs = _apply_dept_filter(
+        qs = _tenant_and_dept_qs(
             SalesOrder.objects.filter(
                 status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
                 created_at__range=(start, end),
@@ -313,7 +322,7 @@ class SalesReportService:
         avg_amount = agg['total_amount'] / agg['order_count'] if agg['order_count'] > 0 else Decimal(0)
 
         # 退货统计
-        return_qs = SalesReturnOrder.objects.filter(
+        return_qs = _tenant_qs(SalesReturnOrder.objects.all(), user).filter(
             status='COMPLETED', completed_at__range=(start, end)
         )
         return_items = SalesReturnOrderItem.objects.filter(return_order__in=return_qs)
@@ -342,7 +351,7 @@ class SalesReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        qs = SalesOrder.objects.filter(
+        qs = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
             created_at__range=(start, end),
         )
@@ -370,7 +379,7 @@ class SalesReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        valid_orders = SalesOrder.objects.filter(
+        valid_orders = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
             created_at__range=(start, end),
         )
@@ -391,7 +400,7 @@ class SalesReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        ranking = SalesOrder.objects.filter(
+        ranking = _tenant_qs(SalesOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'ALLOCATED', 'PARTIALLY_SHIPPED', 'SHIPPED', 'CLOSED'],
             created_at__range=(start, end),
         ).values('customer_id', 'customer__customer_name').annotate(
@@ -413,7 +422,7 @@ class PurchaseReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        qs = _apply_dept_filter(
+        qs = _tenant_and_dept_qs(
             PurchaseOrder.objects.filter(
                 status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
                 created_at__range=(start, end),
@@ -436,7 +445,7 @@ class PurchaseReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        qs = _apply_dept_filter(
+        qs = _tenant_and_dept_qs(
             PurchaseOrder.objects.filter(
                 status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
                 created_at__range=(start, end),
@@ -450,7 +459,7 @@ class PurchaseReportService:
         )
 
         # 退货统计
-        return_qs = PurchaseReturnOrder.objects.filter(
+        return_qs = _tenant_qs(PurchaseReturnOrder.objects.all(), user).filter(
             status='COMPLETED', completed_at__range=(start, end)
         )
         return_items = PurchaseReturnOrderItem.objects.filter(return_order__in=return_qs)
@@ -478,7 +487,7 @@ class PurchaseReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        qs = PurchaseOrder.objects.filter(
+        qs = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
             created_at__range=(start, end),
         )
@@ -500,7 +509,7 @@ class PurchaseReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        ranking = PurchaseOrder.objects.filter(
+        ranking = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
             created_at__range=(start, end),
         ).values('supplier_id', 'supplier__supplier_name').annotate(
@@ -518,7 +527,7 @@ class PurchaseReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        valid_orders = PurchaseOrder.objects.filter(
+        valid_orders = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             status__in=['APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED'],
             created_at__range=(start, end),
         )
@@ -560,14 +569,14 @@ class InventoryReportService:
             cutoff_start = now - timedelta(days=max_days)
             cutoff_end = now - timedelta(days=min_days)
 
-            invs = Inventory.objects.filter(current_qty__gt=0).select_related('product')
+            invs = _tenant_qs(Inventory.objects.filter(current_qty__gt=0).select_related('product'), user)
             total_value = Decimal(0)
             total_qty = Decimal(0)
             count = 0
 
             for inv in invs:
                 # 查找最近一次入库时间
-                last_in = InventoryTransaction.objects.filter(
+                last_in = _tenant_qs(InventoryTransaction.objects.all(), user).filter(
                     product=inv.product,
                     warehouse=inv.warehouse,
                     transaction_type__in=['PURCHASE_IN', 'TRANSFER_IN', 'RETURN_IN', 'STOCKTAKE_GAIN'],
@@ -595,7 +604,7 @@ class InventoryReportService:
         """库存预警分析"""
         from business_apps.inventory.models import Inventory
 
-        inventories = Inventory.objects.select_related('product', 'warehouse').filter(current_qty__gte=0)
+        inventories = _tenant_qs(Inventory.objects.select_related('product', 'warehouse'), user).filter(current_qty__gte=0)
 
         low_stock = []
         out_of_stock = []
@@ -638,7 +647,7 @@ class InventoryReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        qs = InventoryTransaction.objects.filter(created_at__range=(start, end))
+        qs = _tenant_qs(InventoryTransaction.objects.all(), user).filter(created_at__range=(start, end))
 
         summary = qs.values('transaction_type').annotate(
             total_quantity=Coalesce(Sum('quantity'), Decimal(0)),
@@ -664,8 +673,8 @@ class CustomerReportService:
 
         start, end = _get_date_range(period, start_date, end_date)
 
-        total = Customer.objects.filter(is_deleted=False).count()
-        new_customers = Customer.objects.filter(is_deleted=False, created_at__range=(start, end)).count()
+        total = _tenant_qs(Customer.objects.all(), user).filter(is_deleted=False).count()
+        new_customers = _tenant_qs(Customer.objects.all(), user).filter(is_deleted=False, created_at__range=(start, end)).count()
 
         return {
             'total_count': total,
@@ -687,19 +696,19 @@ class CustomerReportService:
         last_30 = now - timedelta(days=30)
         last_90 = now - timedelta(days=90)
 
-        total = Customer.objects.filter(is_deleted=False).count()
+        total = _tenant_qs(Customer.objects.all(), user).filter(is_deleted=False).count()
 
         # 30天内有订单的客户ID
-        active_30_ids = SalesOrder.objects.filter(
+        active_30_ids = _tenant_qs(SalesOrder.objects.all(), user).filter(
             created_at__gte=last_30
         ).values_list('customer_id', flat=True).distinct()
-        active_30 = Customer.objects.filter(is_deleted=False, id__in=active_30_ids).count()
+        active_30 = _tenant_qs(Customer.objects.all(), user).filter(is_deleted=False, id__in=active_30_ids).count()
 
         # 90天内有订单的客户ID
-        active_90_ids = SalesOrder.objects.filter(
+        active_90_ids = _tenant_qs(SalesOrder.objects.all(), user).filter(
             created_at__gte=last_90
         ).values_list('customer_id', flat=True).distinct()
-        active_90 = Customer.objects.filter(is_deleted=False, id__in=active_90_ids).count()
+        active_90 = _tenant_qs(Customer.objects.all(), user).filter(is_deleted=False, id__in=active_90_ids).count()
 
         return {
             'active_30': active_30,
@@ -718,12 +727,12 @@ class CustomerReportService:
         cutoff = now - timedelta(days=90)
 
         # 90天内有订单的客户ID
-        active_ids = SalesOrder.objects.filter(
+        active_ids = _tenant_qs(SalesOrder.objects.all(), user).filter(
             created_at__gte=cutoff
         ).values_list('customer_id', flat=True).distinct()
 
         # 流失客户 = 活跃状态但90天无订单
-        churned_qs = Customer.objects.filter(
+        churned_qs = _tenant_qs(Customer.objects.all(), user).filter(
             is_deleted=False, status='ACTIVE'
         ).exclude(id__in=active_ids)
 
@@ -733,7 +742,7 @@ class CustomerReportService:
 
         # 批量获取最近下单时间
         last_orders = {}
-        for so in SalesOrder.objects.filter(
+        for so in _tenant_qs(SalesOrder.objects.all(), user).filter(
             customer_id__in=[c.id for c in churned_customers]
         ).values_list('customer_id', 'created_at').order_by('customer_id', '-created_at'):
             if so[0] not in last_orders:
@@ -765,13 +774,13 @@ class SupplierReportService:
         now = timezone.now()
         last_30 = now - timedelta(days=30)
 
-        total = Supplier.objects.filter(is_deleted=False).count()
+        total = _tenant_qs(Supplier.objects.all(), user).filter(is_deleted=False).count()
 
         # 30天内有采购的供应商ID
-        active_30_ids = PurchaseOrder.objects.filter(
+        active_30_ids = _tenant_qs(PurchaseOrder.objects.all(), user).filter(
             created_at__gte=last_30
         ).values_list('supplier_id', flat=True).distinct()
-        active_30 = Supplier.objects.filter(is_deleted=False, id__in=active_30_ids).count()
+        active_30 = _tenant_qs(Supplier.objects.all(), user).filter(is_deleted=False, id__in=active_30_ids).count()
 
         return {
             'total': total,
@@ -783,7 +792,7 @@ class SupplierReportService:
         """供应商评价排行"""
         from business_apps.supplier.models import SupplierEvaluation
 
-        ranking = SupplierEvaluation.objects.select_related('supplier').annotate(
+        ranking = _tenant_qs(SupplierEvaluation.objects.select_related('supplier'), user).annotate(
             score_avg=ExpressionWrapper(
                 (F('quality_score') + F('delivery_score') + F('service_score') + F('price_score')) / Value(4.0),
                 output_field=FloatField(),
@@ -814,17 +823,17 @@ class ProductReportService:
         from business_apps.sales.models import SalesOrderItem, SalesOrder
 
         cutoff = timezone.now() - timedelta(days=days)
-        products_with_sales = SalesOrderItem.objects.filter(
+        products_with_sales = _tenant_qs(SalesOrderItem.objects.all(), user).filter(
             order__created_at__gte=cutoff
         ).values_list('product_id', flat=True).distinct()
 
-        slow_products = Product.objects.filter(
+        slow_products = _tenant_qs(Product.objects.all(), user).filter(
             is_deleted=False, status='ACTIVE'
         ).exclude(id__in=products_with_sales)
 
         result = []
         for p in slow_products[:50]:
-            inv = Inventory.objects.filter(product=p).first()
+            inv = _tenant_qs(Inventory.objects.all(), user).filter(product=p).first()
             result.append({
                 'product_id': p.id, 'name': p.name, 'code': p.product_code,
                 'current_stock': str(inv.current_qty) if inv else '0',
@@ -838,7 +847,7 @@ class ProductReportService:
         """商品库存分析"""
         from business_apps.inventory.models import Inventory
 
-        inventories = Inventory.objects.select_related('product', 'warehouse').filter(current_qty__gt=0)
+        inventories = _tenant_qs(Inventory.objects.select_related('product', 'warehouse'), user).filter(current_qty__gt=0)
 
         result = []
         for inv in inventories[:100]:

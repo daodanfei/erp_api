@@ -151,4 +151,4 @@ def get_runtime_config_for_user(user):
 def get_policy(module_key: str, *, user=None, runtime_config=None):
     policy_class = POLICY_REGISTRY[module_key]
     resolved_runtime_config = runtime_config or get_runtime_config_for_user(user)
-    return policy_class(resolved_runtime_config)
+    return policy_class(resolved_runtime_config, user=user)

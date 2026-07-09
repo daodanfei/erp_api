@@ -6,8 +6,9 @@ from typing import Any
 class BasePolicy:
     module_key: str = ""
 
-    def __init__(self, runtime_config):
+    def __init__(self, runtime_config, user=None):
         self.runtime_config = runtime_config
+        self.user = user
 
     def is_module_enabled(self) -> bool:
         return self.runtime_config.is_enabled(self.module_key)

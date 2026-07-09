@@ -2,6 +2,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.db import transaction
 from django.utils import timezone
@@ -236,9 +237,10 @@ class InventoryViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少必要参数"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            product = Product.objects.get(id=product_id, tenant=request.user.tenant, is_deleted=False)
+            product = self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=product_id)
+            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
             InventoryService.change_stock(
-                warehouse=warehouse_id,
+                warehouse=warehouse,
                 product=product,
                 quantity=float(quantity),
                 transaction_type='MANUAL_ADJUST',
@@ -246,6 +248,8 @@ class InventoryViewSet(BaseBusinessViewSet):
                 remark=remark
             )
             return Response({"status": "success"})
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -311,15 +315,19 @@ class StocktakeViewSet(ModuleAwareModelViewSet):
     def add_items(self, request, pk=None):
         stocktake = self.get_object()
         items_data = request.data.get('items', [])
-        for item in items_data:
-            StocktakeItem.objects.create(
-                tenant=stocktake.tenant,
-                stocktake=stocktake,
-                product_id=item['product'],
-                system_qty=item['system_qty'],
-                actual_qty=item['actual_qty'],
-                remark=item.get('remark')
-            )
+        try:
+            for item in items_data:
+                product = self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product'])
+                StocktakeItem.objects.create(
+                    tenant=stocktake.tenant,
+                    stocktake=stocktake,
+                    product=product,
+                    system_qty=item['system_qty'],
+                    actual_qty=item['actual_qty'],
+                    remark=item.get('remark')
+                )
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"status": "success"})
 
     @action(detail=True, methods=['post'])

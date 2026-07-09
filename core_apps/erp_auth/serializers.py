@@ -43,6 +43,8 @@ class ERPDepartmentWriteSerializer(serializers.ModelSerializer):
         tenant = self.context["request"].user.tenant
         if value.tenant_id != tenant.id:
             raise serializers.ValidationError("上级部门不属于当前租户")
+        if not value.status:
+            raise serializers.ValidationError("禁用部门不能作为上级部门")
         instance = getattr(self, "instance", None)
         if instance is not None and value.id == instance.id:
             raise serializers.ValidationError("上级部门不能选择自己")
@@ -188,12 +190,13 @@ class ERPUserWriteSerializer(serializers.ModelSerializer):
         role_ids = list(dict.fromkeys(value))
         if not role_ids:
             return role_ids
-        matched_ids = set(
-            ERPRole.objects.filter(tenant=tenant, id__in=role_ids).values_list("id", flat=True)
-        )
+        roles = list(ERPRole.objects.filter(tenant=tenant, id__in=role_ids))
+        matched_ids = {role.id for role in roles}
         missing_ids = [role_id for role_id in role_ids if role_id not in matched_ids]
         if missing_ids:
             raise serializers.ValidationError("包含不属于当前租户的角色")
+        if any(not role.status for role in roles):
+            raise serializers.ValidationError("禁用角色不能分配给用户")
         return role_ids
 
     def validate_username(self, value):
@@ -212,6 +215,8 @@ class ERPUserWriteSerializer(serializers.ModelSerializer):
         department = ERPDepartment.objects.filter(tenant=tenant, id=value).first()
         if department is None:
             raise serializers.ValidationError("部门不存在或不属于当前租户")
+        if not department.status:
+            raise serializers.ValidationError("禁用部门不能绑定用户")
         return department
 
     def create(self, validated_data):

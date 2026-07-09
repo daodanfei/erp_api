@@ -1,6 +1,7 @@
 from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.db.models import Count, Sum
 from django.db.models.functions import TruncMonth
@@ -36,6 +37,8 @@ class CustomerViewSet(BaseBusinessViewSet):
         'sales_statistics': 'crm:customer:view',
         'credit_overview': 'crm:customer:view',
     }
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['status']
 
     def perform_create(self, serializer):
         policy = get_policy("crm", user=self.request.user)

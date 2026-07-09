@@ -95,6 +95,10 @@ class APService:
     def create_payment(supplier, amount, payment_date, payment_method, operator, cash_account=None, bank_account=None, remark=None):
         if amount <= 0:
             raise ValueError("付款金额必须大于0")
+        if supplier.status == 'BLACKLIST':
+            raise ValueError("黑名单供应商禁止创建付款单")
+        if supplier.status != 'ACTIVE':
+            raise ValueError("未激活供应商禁止创建付款单")
             
         payment_no = APService.generate_payment_no()
         payment = APPayment.objects.create(

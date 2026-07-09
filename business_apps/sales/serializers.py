@@ -2,6 +2,7 @@ from rest_framework import serializers
 from core_apps.policies.registry import get_policy
 
 from business_apps.inventory.features import FIELD_SALES_ORDER_ITEM_WAREHOUSE
+from business_apps.inventory.serializers import ActiveWarehouseValidationMixin
 from .models import SalesOrder, SalesOrderItem, Shipment, ShipmentItem, OrderApprovalLog, OrderChangeLog, OrderAttachment, SalesExecutionLog
 from business_apps.supply_chain.serializers import OutboundOrderListSerializer
 
@@ -24,7 +25,7 @@ class SalesWarehouseFieldRuleSerializerMixin:
         return fields
 
 
-class SalesOrderItemSerializer(SalesWarehouseFieldRuleSerializerMixin, serializers.ModelSerializer):
+class SalesOrderItemSerializer(SalesWarehouseFieldRuleSerializerMixin, ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_code = serializers.CharField(source='product.product_code', read_only=True)
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)

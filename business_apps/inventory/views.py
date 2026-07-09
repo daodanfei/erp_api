@@ -44,6 +44,38 @@ class ProductCategoryViewSet(ModuleAwareModelViewSet):
             return ProductCategoryTreeSerializer
         return ProductCategorySerializer
 
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        child_categories = category.children.all().order_by("id")
+        if child_categories.exists():
+            sample_names = "、".join(child_categories.values_list("name", flat=True)[:3])
+            suffix = "等子分类" if child_categories.count() > 3 else ""
+            return Response(
+                {
+                    "detail": (
+                        f"无法删除分类「{category.name}」：存在下级分类"
+                        f"（如：{sample_names}{suffix}）。请先处理下级分类后再删除。"
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        used_products = category.products.filter(is_deleted=False).order_by("id")
+        if used_products.exists():
+            sample_names = "、".join(used_products.values_list("name", flat=True)[:3])
+            suffix = "等商品" if used_products.count() > 3 else ""
+            return Response(
+                {
+                    "detail": (
+                        f"无法删除分类「{category.name}」：已有商品使用该分类"
+                        f"（如：{sample_names}{suffix}）。请先修改或删除相关商品后再删除分类。"
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return super().destroy(request, *args, **kwargs)
+
 class UnitViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = Unit.objects.all()
@@ -239,6 +271,8 @@ class InventoryViewSet(BaseBusinessViewSet):
         try:
             product = self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=product_id)
             warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
+            if warehouse.status is False:
+                return Response({"detail": "禁用仓库不能用于业务"}, status=status.HTTP_400_BAD_REQUEST)
             InventoryService.change_stock(
                 warehouse=warehouse,
                 product=product,

@@ -26,7 +26,7 @@ from core_apps.blueprints.models import SystemBlueprint, SystemBlueprintVersion,
 from core_apps.tenant.models import Tenant
 from core_apps.tenant.services import TenantService
 
-from .models import ERPPermission, ERPRole, ERPUser
+from .models import ERPDepartment, ERPPermission, ERPRole, ERPUser
 from .services import ERPUserProvisionService
 
 
@@ -590,6 +590,16 @@ class ERPUserManagementApiTest(APITestCase):
             data_scope="SELF",
             status=True,
         )
+        self.active_department = ERPDepartment.objects.create(
+            tenant=self.tenant,
+            name="销售部",
+            status=True,
+        )
+        self.disabled_department = ERPDepartment.objects.create(
+            tenant=self.tenant,
+            name="停用部门",
+            status=False,
+        )
 
     def login(self):
         response = self.client.post(
@@ -734,6 +744,90 @@ class ERPUserManagementApiTest(APITestCase):
 
         self.assertEqual(limit_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("租户用户数已达上限", str(limit_response.data))
+
+    def test_create_user_rejects_disabled_department(self):
+        self.login()
+
+        response = self.client.post(
+            "/api/erp-auth/users/",
+            {
+                "username": "disabled_dept_user",
+                "name": "停用部门用户",
+                "password": "operator-123",
+                "status": True,
+                "dept": self.disabled_department.id,
+                "role_ids": [self.staff_role.id],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("禁用部门不能绑定用户", str(response.data))
+
+    def test_create_user_rejects_disabled_role(self):
+        self.login()
+        self.staff_role.status = False
+        self.staff_role.save(update_fields=["status"])
+
+        response = self.client.post(
+            "/api/erp-auth/users/",
+            {
+                "username": "disabled_role_user",
+                "name": "禁用角色用户",
+                "password": "operator-123",
+                "status": True,
+                "role_ids": [self.staff_role.id],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("禁用角色不能分配给用户", str(response.data))
+
+    def test_delete_department_is_blocked_when_users_or_children_exist(self):
+        self.login()
+        ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="dept_user",
+            password="password-123",
+            dept=self.active_department,
+        )
+        child_department = ERPDepartment.objects.create(
+            tenant=self.tenant,
+            name="销售一组",
+            parent=self.active_department,
+            status=True,
+        )
+
+        user_bound_response = self.client.delete(f"/api/erp-auth/departments/{self.active_department.id}/")
+        self.assertEqual(user_bound_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("子部门", str(user_bound_response.data))
+
+        child_department.delete()
+        user_bound_response = self.client.delete(f"/api/erp-auth/departments/{self.active_department.id}/")
+        self.assertEqual(user_bound_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("用户绑定", str(user_bound_response.data))
+
+    def test_delete_role_is_blocked_when_assigned_to_user(self):
+        self.login()
+        target_role = ERPRole.objects.create(
+            tenant=self.tenant,
+            name="绑定角色",
+            code="bound-role",
+            data_scope="SELF",
+            status=True,
+        )
+        target_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="bound_role_user",
+            password="password-123",
+        )
+        target_user.roles.add(target_role)
+
+        response = self.client.delete(f"/api/erp-auth/roles/{target_role.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("已分配给用户", str(response.data))
 
 
 class ERPUserPurchaseFlowTest(TestCase):

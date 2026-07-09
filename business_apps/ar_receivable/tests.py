@@ -80,6 +80,19 @@ class ARServiceTest(TestCase):
         self.cash_account.refresh_from_db()
         self.assertEqual(self.cash_account.current_balance, 0)
 
+    def test_create_receipt_rejects_blacklisted_customer(self):
+        self.customer.status = 'BLACKLIST'
+        self.customer.save(update_fields=['status'])
+
+        with self.assertRaisesRegex(ValueError, '黑名单客户禁止创建收款单'):
+            ARService.create_receipt(
+                self.customer,
+                100,
+                timezone.now().date(),
+                'BANK_TRANSFER',
+                self.user,
+            )
+
     def test_approve_then_execute_receipt_posts_cash_and_blocks_creator(self):
         receipt = ARService.create_receipt(
             self.customer,

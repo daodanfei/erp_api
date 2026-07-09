@@ -149,6 +149,13 @@ class APServiceTest(TestCase):
         self.assertEqual(ap.status, 'PAID')
         self.assertEqual(payment.status, 'APPROVED')
 
+    def test_create_payment_rejects_blacklisted_supplier(self):
+        self.supplier.status = 'BLACKLIST'
+        self.supplier.save(update_fields=['status'])
+
+        with self.assertRaisesRegex(ValueError, '黑名单供应商禁止创建付款单'):
+            APService.create_payment(self.supplier, 100, timezone.now().date(), 'BANK_TRANSFER', self.user)
+
     def test_over_allocation_prevented(self):
         ap = APService.generate_ap_from_receipt(self.receipt, self.user)
         payment = APService.create_payment(self.supplier, 500, timezone.now().date(), 'BANK_TRANSFER', self.user)

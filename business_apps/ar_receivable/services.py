@@ -198,6 +198,10 @@ class ARService:
         """Create a draft receipt. Cash is posted only after approval."""
         if amount <= 0:
             raise ValueError("收款金额必须大于0")
+        if customer.status == 'BLACKLIST':
+            raise ValueError("黑名单客户禁止创建收款单")
+        if customer.status != 'ACTIVE':
+            raise ValueError("未激活客户禁止创建收款单")
         policy = get_policy("ar_receivable", user=operator)
         receipt_no = ARService.generate_no('RC')
         receipt = Receipt.objects.create(

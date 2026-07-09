@@ -247,6 +247,50 @@ class TransferOrderApiTest(APITestCase):
         self.assertEqual(order.status, "APPROVED")
         self.assertEqual(order.approved_by_id, self.user.id)
 
+    def test_transfer_create_rejects_disabled_product(self):
+        self.product.status = "DISABLED"
+        self.product.save(update_fields=["status"])
+
+        response = self.client.post(
+            "/api/supply-chain/transfer-orders/",
+            {
+                "from_warehouse": self.from_wh.id,
+                "to_warehouse": self.to_wh.id,
+                "items": [
+                    {
+                        "product": self.product.id,
+                        "quantity": "1.000",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("商品已停用", response.data["detail"])
+
+    def test_transfer_create_rejects_draft_product(self):
+        self.product.status = "DRAFT"
+        self.product.save(update_fields=["status"])
+
+        response = self.client.post(
+            "/api/supply-chain/transfer-orders/",
+            {
+                "from_warehouse": self.from_wh.id,
+                "to_warehouse": self.to_wh.id,
+                "items": [
+                    {
+                        "product": self.product.id,
+                        "quantity": "1.000",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("商品为草稿状态", response.data["detail"])
+
 
 class OutboundOrderApiTest(APITestCase):
     def setUp(self):

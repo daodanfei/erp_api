@@ -3,6 +3,7 @@ from rest_framework import serializers
 from core_apps.policies.registry import get_policy
 
 from business_apps.inventory.features import FIELD_PURCHASE_ORDER_ITEM_WAREHOUSE
+from business_apps.inventory.serializers import ActiveWarehouseValidationMixin
 from .models import (
     PurchaseOrder, PurchaseOrderItem, PurchaseReceipt, PurchaseReceiptItem,
     PurchaseApprovalLog, PurchaseChangeLog, PurchaseAttachment
@@ -27,7 +28,7 @@ class PurchaseWarehouseFieldRuleSerializerMixin:
         return fields
 
 
-class PurchaseOrderItemSerializer(PurchaseWarehouseFieldRuleSerializerMixin, serializers.ModelSerializer):
+class PurchaseOrderItemSerializer(PurchaseWarehouseFieldRuleSerializerMixin, ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_code = serializers.CharField(source='product.product_code', read_only=True)
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
@@ -51,7 +52,7 @@ class PurchaseReceiptItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class PurchaseReceiptSerializer(serializers.ModelSerializer):
+class PurchaseReceiptSerializer(ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     items = PurchaseReceiptItemSerializer(many=True, read_only=True)
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)

@@ -125,6 +125,75 @@ class PurchaseOrderApiTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("预计到货日期格式错误", response.data["detail"])
 
+    def test_create_order_rejects_blacklisted_supplier_and_disabled_product(self):
+        self.supplier.status = "BLACKLIST"
+        self.supplier.save(update_fields=["status"])
+
+        response = self.client.post(
+            "/api/purchase/orders/",
+            {
+                "supplier": self.supplier.id,
+                "items": [
+                    {
+                        "product": self.product.id,
+                        "warehouse": self.warehouse.id,
+                        "unit_price": "10.00",
+                        "quantity": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("黑名单供应商禁止创建订单", response.data["detail"])
+
+    def test_create_order_rejects_disabled_product(self):
+        self.product.status = "DISABLED"
+        self.product.save(update_fields=["status"])
+
+        response = self.client.post(
+            "/api/purchase/orders/",
+            {
+                "supplier": self.supplier.id,
+                "items": [
+                    {
+                        "product": self.product.id,
+                        "warehouse": self.warehouse.id,
+                        "unit_price": "10.00",
+                        "quantity": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("商品已停用", response.data["detail"])
+
+    def test_create_order_rejects_draft_product(self):
+        self.product.status = "DRAFT"
+        self.product.save(update_fields=["status"])
+
+        response = self.client.post(
+            "/api/purchase/orders/",
+            {
+                "supplier": self.supplier.id,
+                "items": [
+                    {
+                        "product": self.product.id,
+                        "warehouse": self.warehouse.id,
+                        "unit_price": "10.00",
+                        "quantity": 1,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("商品为草稿状态", response.data["detail"])
+
     def test_completed_purchase_order_cannot_be_updated_or_deleted(self):
         order = self._create_completed_order()
 

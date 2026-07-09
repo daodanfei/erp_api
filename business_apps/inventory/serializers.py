@@ -45,6 +45,8 @@ class ProductCategorySerializer(serializers.ModelSerializer):
         instance = getattr(self, "instance", None)
         if instance is not None and value.id == instance.id:
             raise serializers.ValidationError("上级分类不能选择自己")
+        if value.status is False:
+            raise serializers.ValidationError("禁用分类不能作为上级分类")
         current = value
         while current is not None:
             if instance is not None and current.id == instance.id:
@@ -107,12 +109,35 @@ class ProductSerializer(serializers.ModelSerializer):
             'is_deleted', 'deleted_at', 'deleted_by'
         )
 
+    def validate_category(self, value):
+        if value is None:
+            return value
+        if value.status is False:
+            raise serializers.ValidationError("禁用商品分类不能用于商品")
+        return value
+
+    def validate_unit(self, value):
+        if value is None:
+            return value
+        if value.status is False:
+            raise serializers.ValidationError("禁用计量单位不能用于商品")
+        return value
+
 class WarehouseSerializer(serializers.ModelSerializer):
     manager_name = serializers.CharField(source='manager.username', read_only=True)
     class Meta:
         model = Warehouse
         fields = '__all__'
         read_only_fields = ('warehouse_code',)
+
+
+class ActiveWarehouseValidationMixin:
+    def validate_warehouse(self, value):
+        if value is None:
+            return value
+        if value.status is False:
+            raise serializers.ValidationError("禁用仓库不能用于业务")
+        return value
 
 class InventorySerializer(WarehouseFieldRuleSerializerMixin, serializers.ModelSerializer):
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
@@ -152,7 +177,7 @@ class StocktakeItemSerializer(serializers.ModelSerializer):
         model = StocktakeItem
         fields = '__all__'
 
-class StocktakeSerializer(WarehouseFieldRuleSerializerMixin, serializers.ModelSerializer):
+class StocktakeSerializer(WarehouseFieldRuleSerializerMixin, ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
     creator_name = serializers.CharField(source='created_by.username', read_only=True)
     items = StocktakeItemSerializer(many=True, read_only=True)

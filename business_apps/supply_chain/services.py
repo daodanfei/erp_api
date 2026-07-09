@@ -24,8 +24,28 @@ class OutboundService:
         return CodeRuleService.generate('OUTBOUND_ORDER')
 
     @staticmethod
+    def validate_products(items_data):
+        for item in items_data:
+            product = item['product']
+            if product.status == 'DRAFT':
+                raise ValueError(f"商品为草稿状态，禁止参与业务：{product.name}")
+            if product.status == 'DISABLED':
+                raise ValueError(f"商品已停用：{product.name}")
+
+    @staticmethod
+    def validate_order_references(order):
+        if order.sales_order_id and order.sales_order.customer.status == 'BLACKLIST':
+            raise ValueError("黑名单客户禁止创建出库单")
+        OutboundService.validate_products(
+            [{'product': item.product} for item in order.items.select_related('product').all()]
+        )
+
+    @staticmethod
     @transaction.atomic
     def create_order(sales_order, warehouse, items_data, user, remark=None):
+        if sales_order and sales_order.customer.status == 'BLACKLIST':
+            raise ValueError("黑名单客户禁止创建出库单")
+        OutboundService.validate_products(items_data)
         order = OutboundOrder.objects.create(
             tenant=sales_order.tenant if sales_order else warehouse.tenant,
             outbound_no=OutboundService.generate_no(),
@@ -115,6 +135,7 @@ class OutboundService:
             raise ValueError("当前状态不允许提交审核")
         if order.items.count() == 0:
             raise ValueError("出库明细不能为空")
+        OutboundService.validate_order_references(order)
         order.status = 'PENDING'
         erp_user_id = get_erp_user_id(user)
         if erp_user_id is not None:
@@ -246,6 +267,21 @@ class TransferService:
         return CodeRuleService.generate('TRANSFER_ORDER')
 
     @staticmethod
+    def validate_products(items_data):
+        for item in items_data:
+            product = item['product']
+            if product.status == 'DRAFT':
+                raise ValueError(f"商品为草稿状态，禁止参与业务：{product.name}")
+            if product.status == 'DISABLED':
+                raise ValueError(f"商品已停用：{product.name}")
+
+    @staticmethod
+    def validate_order_references(order):
+        TransferService.validate_products(
+            [{'product': item.product} for item in order.items.select_related('product').all()]
+        )
+
+    @staticmethod
     @transaction.atomic
     def create_order(from_warehouse, to_warehouse, items_data, user, remark=None):
         policy = get_policy("supply_chain", user=user)
@@ -253,6 +289,7 @@ class TransferService:
             raise ValueError("当前配置未启用调拨")
         if from_warehouse.id == to_warehouse.id:
             raise ValueError("禁止同仓库调拨")
+        TransferService.validate_products(items_data)
 
         order = TransferOrder.objects.create(
             tenant=from_warehouse.tenant,
@@ -286,6 +323,7 @@ class TransferService:
             raise ValueError("只有草稿状态的调拨单可以编辑")
         if from_warehouse.id == to_warehouse.id:
             raise ValueError("禁止同仓库调拨")
+        TransferService.validate_products(items_data)
 
         order.from_warehouse = from_warehouse
         order.to_warehouse = to_warehouse
@@ -318,6 +356,7 @@ class TransferService:
             raise ValueError("只有草稿状态的调拨单可以提交审核")
         if order.items.count() == 0:
             raise ValueError("调拨单明细不能为空")
+        TransferService.validate_order_references(order)
         erp_user_id = get_erp_user_id(user)
         if policy.transfer_approval_enabled():
             order.status = 'PENDING_APPROVAL'
@@ -469,11 +508,29 @@ class SalesReturnService:
         return CodeRuleService.generate('SALES_RETURN')
 
     @staticmethod
+    def validate_customer(customer):
+        if customer and customer.status == 'BLACKLIST':
+            raise ValueError("黑名单客户禁止创建销售退货单")
+        if customer and customer.status != 'ACTIVE':
+            raise ValueError("未激活客户禁止创建销售退货单")
+
+    @staticmethod
+    def validate_products(items_data):
+        for item in items_data:
+            product = item['product']
+            if product.status == 'DRAFT':
+                raise ValueError(f"商品为草稿状态，禁止参与业务：{product.name}")
+            if product.status == 'DISABLED':
+                raise ValueError(f"商品已停用：{product.name}")
+
+    @staticmethod
     @transaction.atomic
     def create_order(customer, sales_order, warehouse, items_data, user, reason=None, remark=None):
         policy = get_policy("supply_chain", user=user)
         if not policy.sales_return_enabled():
             raise ValueError("当前配置未启用销售退货")
+        SalesReturnService.validate_customer(customer)
+        SalesReturnService.validate_products(items_data)
         order = SalesReturnOrder.objects.create(
             tenant=(
                 customer.tenant if customer else (
@@ -564,11 +621,29 @@ class PurchaseReturnService:
         return CodeRuleService.generate('PURCHASE_RETURN')
 
     @staticmethod
+    def validate_supplier(supplier):
+        if supplier and supplier.status == 'BLACKLIST':
+            raise ValueError("黑名单供应商禁止创建采购退货单")
+        if supplier and supplier.status != 'ACTIVE':
+            raise ValueError("未激活供应商禁止创建采购退货单")
+
+    @staticmethod
+    def validate_products(items_data):
+        for item in items_data:
+            product = item['product']
+            if product.status == 'DRAFT':
+                raise ValueError(f"商品为草稿状态，禁止参与业务：{product.name}")
+            if product.status == 'DISABLED':
+                raise ValueError(f"商品已停用：{product.name}")
+
+    @staticmethod
     @transaction.atomic
     def create_order(supplier, purchase_order, warehouse, items_data, user, reason=None, remark=None):
         policy = get_policy("supply_chain", user=user)
         if not policy.purchase_return_enabled():
             raise ValueError("当前配置未启用采购退货")
+        PurchaseReturnService.validate_supplier(supplier)
+        PurchaseReturnService.validate_products(items_data)
         order = PurchaseReturnOrder.objects.create(
             tenant=(
                 supplier.tenant if supplier else (

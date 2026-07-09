@@ -49,10 +49,33 @@ class PurchaseOrderService:
         return CodeRuleService.generate('PURCHASE_RECEIPT')
 
     @staticmethod
-    @transaction.atomic
-    def create_order(supplier, items_data, user, remark=None, expected_arrival_date=None):
+    def validate_supplier(supplier):
         if supplier.status == 'BLACKLIST':
             raise ValueError("黑名单供应商禁止创建订单")
+        if supplier.status != 'ACTIVE':
+            raise ValueError("未激活供应商禁止创建订单")
+
+    @staticmethod
+    def validate_products(items_data):
+        for item in items_data:
+            product = item['product']
+            if product.status == 'DRAFT':
+                raise ValueError(f"商品为草稿状态，禁止参与业务：{product.name}")
+            if product.status == 'DISABLED':
+                raise ValueError(f"商品已停用：{product.name}")
+
+    @staticmethod
+    def validate_order_references(order):
+        PurchaseOrderService.validate_supplier(order.supplier)
+        PurchaseOrderService.validate_products(
+            [{'product': item.product} for item in order.items.select_related('product').all()]
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def create_order(supplier, items_data, user, remark=None, expected_arrival_date=None):
+        PurchaseOrderService.validate_supplier(supplier)
+        PurchaseOrderService.validate_products(items_data)
 
         inventory_policy = PurchaseOrderService.get_inventory_policy(user=user)
         expected_arrival_date = PurchaseOrderService.normalize_expected_arrival_date(expected_arrival_date)
@@ -109,6 +132,10 @@ class PurchaseOrderService:
 
         inventory_policy = PurchaseOrderService.get_inventory_policy(user=user)
         expected_arrival_date = PurchaseOrderService.normalize_expected_arrival_date(expected_arrival_date)
+        PurchaseOrderService.validate_supplier(supplier or order.supplier)
+        PurchaseOrderService.validate_products(
+            items_data if items_data is not None else [{'product': item.product} for item in order.items.select_related('product').all()]
+        )
 
         # 记录变更日志
         if supplier and supplier.id != order.supplier_id:
@@ -224,6 +251,7 @@ class PurchaseOrderService:
             raise ValueError(f"当前状态 {order.get_status_display()} 不允许提交审核")
         if order.items.count() == 0:
             raise ValueError("订单明细不能为空")
+        PurchaseOrderService.validate_order_references(order)
         order.status = next_status
         order.submitted_by = build_erp_user_fk_kwargs(PurchaseOrder, user=user, field_names=("submitted_by",)).get("submitted_by")
         order.submitted_at = timezone.now()

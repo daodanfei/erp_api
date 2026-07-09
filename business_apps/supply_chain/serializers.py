@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from business_apps.inventory.serializers import ActiveWarehouseValidationMixin
 from .models import (
     OutboundOrder, OutboundOrderItem,
     TransferOrder, TransferOrderItem,
@@ -20,7 +21,7 @@ class OutboundOrderItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class OutboundOrderSerializer(serializers.ModelSerializer):
+class OutboundOrderSerializer(ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     items = OutboundOrderItemSerializer(many=True, read_only=True)
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
     sales_order_no = serializers.CharField(source='sales_order.order_no', read_only=True)
@@ -72,6 +73,20 @@ class TransferOrderSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ('transfer_no', 'status', 'created_by', 'dept', 'completed_at', 'cancelled_at', 'submitted_by', 'submitted_at', 'approved_by', 'approved_at', 'outbound_confirmed_by', 'outbound_confirmed_at', 'inbound_confirmed_by', 'inbound_confirmed_at')
 
+    def validate_from_warehouse(self, value):
+        if value is None:
+            return value
+        if value.status is False:
+            raise serializers.ValidationError("禁用仓库不能用于业务")
+        return value
+
+    def validate_to_warehouse(self, value):
+        if value is None:
+            return value
+        if value.status is False:
+            raise serializers.ValidationError("禁用仓库不能用于业务")
+        return value
+
 
 class TransferOrderListSerializer(serializers.ModelSerializer):
     from_warehouse_name = serializers.CharField(source='from_warehouse.warehouse_name', read_only=True)
@@ -96,7 +111,7 @@ class SalesReturnOrderItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class SalesReturnOrderSerializer(serializers.ModelSerializer):
+class SalesReturnOrderSerializer(ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     items = SalesReturnOrderItemSerializer(many=True, read_only=True)
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
     customer_name = serializers.CharField(source='customer.customer_name', read_only=True)
@@ -131,7 +146,7 @@ class PurchaseReturnOrderItemSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class PurchaseReturnOrderSerializer(serializers.ModelSerializer):
+class PurchaseReturnOrderSerializer(ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     items = PurchaseReturnOrderItemSerializer(many=True, read_only=True)
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
     supplier_name = serializers.CharField(source='supplier.supplier_name', read_only=True)

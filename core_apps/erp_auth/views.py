@@ -68,6 +68,16 @@ class ERPDepartmentViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(tenant=self.request.user.tenant)
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        child_count = instance.children.count()
+        if child_count:
+            raise ValidationError(f"该部门下仍有 {child_count} 个子部门，不能删除")
+        user_count = instance.users.count()
+        if user_count:
+            raise ValidationError(f"该部门下仍有 {user_count} 个用户绑定，不能删除")
+        return super().destroy(request, *args, **kwargs)
+
 
 class ERPRoleViewSet(viewsets.ModelViewSet):
     queryset = ERPRole.objects.select_related("tenant").prefetch_related("permissions").all()
@@ -93,6 +103,8 @@ class ERPRoleViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         if instance.is_system:
             raise ValidationError("系统角色不能删除")
+        if instance.users.exists():
+            raise ValidationError("当前角色已分配给用户，不能删除")
         return super().destroy(request, *args, **kwargs)
 
 

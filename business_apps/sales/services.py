@@ -77,6 +77,29 @@ class SalesOrderService:
         return messages[action]
 
     @staticmethod
+    def validate_customer(customer):
+        if customer.status == 'BLACKLIST':
+            raise ValueError("黑名单客户禁止创建订单")
+        if customer.status != 'ACTIVE':
+            raise ValueError("未激活客户禁止创建订单")
+
+    @staticmethod
+    def validate_products(items_data):
+        for item in items_data:
+            product = item['product']
+            if product.status == 'DRAFT':
+                raise ValueError(f"商品为草稿状态，禁止参与业务：{product.name}")
+            if product.status == 'DISABLED':
+                raise ValueError(f"商品已停用：{product.name}")
+
+    @staticmethod
+    def validate_order_references(order):
+        SalesOrderService.validate_customer(order.customer)
+        SalesOrderService.validate_products(
+            [{'product': item.product} for item in order.items.select_related('product').all()]
+        )
+
+    @staticmethod
     def validate_transition(order, action, next_status=None):
         allowed_from = SalesOrderService.STATE_MACHINE[action]['from']
         if order.status not in allowed_from:
@@ -140,8 +163,8 @@ class SalesOrderService:
     @staticmethod
     @transaction.atomic
     def create_order(customer, items_data, user, remark=None, expected_delivery_date=None):
-        if customer.status == 'BLACKLIST':
-            raise ValueError("黑名单客户禁止创建订单")
+        SalesOrderService.validate_customer(customer)
+        SalesOrderService.validate_products(items_data)
 
         inventory_policy = SalesOrderService.get_inventory_policy(user=user)
         expected_delivery_date = SalesOrderService.normalize_expected_delivery_date(expected_delivery_date)
@@ -166,9 +189,6 @@ class SalesOrderService:
         total_amt = Decimal('0')
         for item in items_data:
             product = item['product']
-            if product.status == 'DISABLED':
-                raise ValueError(f"商品已停用：{product.name}")
-            
             qty = Decimal(str(item['quantity']))
             price = Decimal(str(item['unit_price']))
             amt = qty * price
@@ -199,6 +219,10 @@ class SalesOrderService:
 
         inventory_policy = SalesOrderService.get_inventory_policy(user=user)
         expected_delivery_date = SalesOrderService.normalize_expected_delivery_date(expected_delivery_date)
+        SalesOrderService.validate_customer(customer or order.customer)
+        SalesOrderService.validate_products(
+            items_data if items_data is not None else [{'product': item.product} for item in order.items.select_related('product').all()]
+        )
 
         if customer and customer.id != order.customer_id:
             OrderChangeLog.objects.create(
@@ -319,6 +343,7 @@ class SalesOrderService:
         policy = SalesOrderService.get_policy(user=user)
         next_status = policy.next_submit_status()
         SalesOrderService.validate_transition(order, 'submit', next_status=next_status)
+        SalesOrderService.validate_order_references(order)
         if policy.credit_control_enabled():
             SalesOrderService.check_credit_on_submit(order)
 

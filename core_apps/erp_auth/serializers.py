@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 from .models import ERPDepartment, ERPPermission, ERPRole, ERPUser
 from .services import ERPUserProvisionService, generate_erp_role_code, get_enabled_erp_permission_codes
@@ -284,15 +286,14 @@ class ERPLoginSerializer(serializers.Serializer):
         return attrs
 
 
-class ERPTokenRefreshSerializer(serializers.Serializer):
-    refresh = serializers.CharField()
+class ERPTokenRefreshSerializer(TokenRefreshSerializer):
+    token_class = ERPRefreshToken
 
     def validate(self, attrs):
-        refresh = ERPRefreshToken(attrs["refresh"])
-        return {
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
-        }
+        refresh = self.token_class(attrs["refresh"])
+        if refresh.get("user_scope") != "erp":
+            raise AuthenticationFailed("Invalid ERP refresh token", code="token_not_valid")
+        return super().validate(attrs)
 
 
 class ERPChangePasswordSerializer(serializers.Serializer):

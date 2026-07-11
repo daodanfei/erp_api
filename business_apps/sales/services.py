@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, F, ExpressionWrapper, DecimalField
 from .models import (
     SalesOrder,
     SalesOrderItem,
@@ -13,6 +13,7 @@ from .models import (
     OrderChangeLog,
     SalesExecutionLog,
 )
+from business_apps.inventory.models import Inventory
 from business_apps.inventory.services import InventoryService
 from business_apps.inventory.policies import InventoryPolicy
 from business_apps.platform.services import CodeRuleService
@@ -25,6 +26,15 @@ from core_apps.erp_auth.compat import (
 from core_apps.policies.registry import get_policy
 
 class SalesOrderService:
+    THREE_DECIMAL_PLACES = Decimal("0.000")
+    OPEN_COMMITMENT_STATUSES = (
+        SalesOrder.STATUS_DRAFT,
+        SalesOrder.STATUS_PENDING_APPROVAL,
+        SalesOrder.STATUS_APPROVED,
+        SalesOrder.STATUS_ALLOCATED,
+        SalesOrder.STATUS_PARTIALLY_SHIPPED,
+    )
+
     STATE_MACHINE = {
         'submit': {'from': {SalesOrder.STATUS_DRAFT}, 'to': SalesOrder.STATUS_PENDING_APPROVAL},
         'approve': {'from': {SalesOrder.STATUS_PENDING_APPROVAL}, 'to': SalesOrder.STATUS_APPROVED},
@@ -100,6 +110,90 @@ class SalesOrderService:
         )
 
     @staticmethod
+    def get_open_sales_commitment_quantity(*, warehouse, product, exclude_order_id=None):
+        remaining_expr = ExpressionWrapper(
+            F('quantity') - F('shipped_quantity'),
+            output_field=DecimalField(max_digits=15, decimal_places=3),
+        )
+        queryset = SalesOrderItem.objects.filter(
+            warehouse=warehouse,
+            product=product,
+            order__status__in=SalesOrderService.OPEN_COMMITMENT_STATUSES,
+        )
+        if exclude_order_id is not None:
+            queryset = queryset.exclude(order_id=exclude_order_id)
+        return queryset.aggregate(total=Sum(remaining_expr))['total'] or Decimal('0')
+
+    @staticmethod
+    def normalize_and_validate_sellable_items(*, items_data, user, exclude_order_id=None):
+        inventory_policy = SalesOrderService.get_inventory_policy(user=user)
+        SalesOrderService.validate_products(items_data)
+
+        normalized_items = []
+        requested_quantities: dict[tuple[int, int], Decimal] = {}
+        warehouse_map = {}
+        product_map = {}
+
+        for item in items_data:
+            product = item['product']
+            warehouse = inventory_policy.resolve_warehouse(item.get('warehouse'))
+            qty = Decimal(str(item['quantity']))
+            price = Decimal(str(item['unit_price']))
+            if qty <= 0:
+                raise ValueError(f"销售数量必须大于0：{product.name}")
+            normalized_items.append({
+                **item,
+                'warehouse': warehouse,
+                'quantity': qty,
+                'unit_price': price,
+                'amount': qty * price,
+            })
+            key = (warehouse.id, product.id)
+            requested_quantities[key] = requested_quantities.get(key, Decimal('0')) + qty
+            warehouse_map[key] = warehouse
+            product_map[key] = product
+
+        for key, requested_qty in requested_quantities.items():
+            warehouse = warehouse_map[key]
+            product = product_map[key]
+            inventory = Inventory.objects.filter(warehouse=warehouse, product=product).only('current_qty').first()
+            current_qty = inventory.current_qty if inventory is not None else Decimal('0')
+            committed_qty = SalesOrderService.get_open_sales_commitment_quantity(
+                warehouse=warehouse,
+                product=product,
+                exclude_order_id=exclude_order_id,
+            )
+            sellable_qty = current_qty - committed_qty
+            if requested_qty > sellable_qty:
+                raise ValueError(
+                    f"可销售数量不足：{product.name} 在 {warehouse.warehouse_name} 当前库存"
+                    f"{current_qty.quantize(SalesOrderService.THREE_DECIMAL_PLACES)}，"
+                    f"其他未完成销售单已占用"
+                    f"{committed_qty.quantize(SalesOrderService.THREE_DECIMAL_PLACES)}，"
+                    f"当前可销售{max(sellable_qty, Decimal('0')).quantize(SalesOrderService.THREE_DECIMAL_PLACES)}，"
+                    f"本次申请{requested_qty.quantize(SalesOrderService.THREE_DECIMAL_PLACES)}"
+                )
+
+        return normalized_items
+
+    @staticmethod
+    def validate_sellable_quantities_for_order(order):
+        items_data = [
+            {
+                'product': item.product,
+                'warehouse': item.warehouse,
+                'quantity': item.quantity,
+                'unit_price': item.unit_price,
+            }
+            for item in order.items.select_related('product', 'warehouse').all()
+        ]
+        SalesOrderService.normalize_and_validate_sellable_items(
+            items_data=items_data,
+            user=order.created_by,
+            exclude_order_id=order.id,
+        )
+
+    @staticmethod
     def validate_transition(order, action, next_status=None):
         allowed_from = SalesOrderService.STATE_MACHINE[action]['from']
         if order.status not in allowed_from:
@@ -164,9 +258,10 @@ class SalesOrderService:
     @transaction.atomic
     def create_order(customer, items_data, user, remark=None, expected_delivery_date=None):
         SalesOrderService.validate_customer(customer)
-        SalesOrderService.validate_products(items_data)
-
-        inventory_policy = SalesOrderService.get_inventory_policy(user=user)
+        normalized_items = SalesOrderService.normalize_and_validate_sellable_items(
+            items_data=items_data,
+            user=user,
+        )
         expected_delivery_date = SalesOrderService.normalize_expected_delivery_date(expected_delivery_date)
         order_no = SalesOrderService.generate_order_no()
         order = SalesOrder.objects.create(
@@ -187,18 +282,18 @@ class SalesOrderService:
 
         total_qty = 0
         total_amt = Decimal('0')
-        for item in items_data:
+        for item in normalized_items:
             product = item['product']
-            qty = Decimal(str(item['quantity']))
-            price = Decimal(str(item['unit_price']))
-            amt = qty * price
+            qty = item['quantity']
+            price = item['unit_price']
+            amt = item['amount']
             
             SalesOrderItem.objects.create(
                 tenant=order.tenant,
                 order=order,
                 product=product,
                 product_name_snapshot=product.name,
-                warehouse=inventory_policy.resolve_warehouse(item.get('warehouse')),
+                warehouse=item['warehouse'],
                 quantity=qty,
                 unit_price=price,
                 amount=amt
@@ -217,12 +312,17 @@ class SalesOrderService:
         if order.status not in ['DRAFT', 'REJECTED']:
             raise ValueError("只有草稿或已驳回状态的订单可以修改")
 
-        inventory_policy = SalesOrderService.get_inventory_policy(user=user)
         expected_delivery_date = SalesOrderService.normalize_expected_delivery_date(expected_delivery_date)
         SalesOrderService.validate_customer(customer or order.customer)
-        SalesOrderService.validate_products(
-            items_data if items_data is not None else [{'product': item.product} for item in order.items.select_related('product').all()]
-        )
+        normalized_items = None
+        if items_data is not None:
+            normalized_items = SalesOrderService.normalize_and_validate_sellable_items(
+                items_data=items_data,
+                user=user,
+                exclude_order_id=order.id,
+            )
+        else:
+            SalesOrderService.validate_sellable_quantities_for_order(order)
 
         if customer and customer.id != order.customer_id:
             OrderChangeLog.objects.create(
@@ -290,18 +390,18 @@ class SalesOrderService:
 
             total_qty = Decimal('0')
             total_amt = Decimal('0')
-            for item in items_data:
+            for item in normalized_items:
                 product = item['product']
-                qty = Decimal(str(item['quantity']))
-                price = Decimal(str(item['unit_price']))
-                amt = qty * price
+                qty = item['quantity']
+                price = item['unit_price']
+                amt = item['amount']
 
                 SalesOrderItem.objects.create(
                     tenant=order.tenant,
                     order=order,
                     product=product,
                     product_name_snapshot=product.name,
-                    warehouse=inventory_policy.resolve_warehouse(item.get('warehouse')),
+                    warehouse=item['warehouse'],
                     quantity=qty,
                     unit_price=price,
                     amount=amt
@@ -344,6 +444,7 @@ class SalesOrderService:
         next_status = policy.next_submit_status()
         SalesOrderService.validate_transition(order, 'submit', next_status=next_status)
         SalesOrderService.validate_order_references(order)
+        SalesOrderService.validate_sellable_quantities_for_order(order)
         if policy.credit_control_enabled():
             SalesOrderService.check_credit_on_submit(order)
 

@@ -14,6 +14,7 @@ from core_apps.common.viewsets import (
     validate_erp_related_tenant_scope,
 )
 from core_apps.erp_auth.compat import build_erp_user_and_dept_kwargs, build_erp_user_fk_kwargs
+from core_apps.tenant.services import TenantService
 from .models import Product, ProductCategory, Unit, ProductImage, ProductAttachment, ProductTag, Warehouse, Inventory, InventoryTransaction, Stocktake, StocktakeItem
 from .serializers import (
     ProductSerializer, ProductCategorySerializer, ProductCategoryTreeSerializer,
@@ -236,6 +237,26 @@ class WarehouseViewSet(ModuleAwareModelViewSet):
             **build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user),
         )
 
+    def perform_update(self, serializer):
+        warehouse = serializer.instance
+        next_status = serializer.validated_data.get("status", warehouse.status)
+        if warehouse.status and next_status is False:
+            runtime_config = TenantService.get_runtime_config(self.request.user.tenant)
+            InventoryService.validate_warehouse_can_be_disabled(
+                warehouse=warehouse,
+                runtime_config=runtime_config,
+            )
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        runtime_config = TenantService.get_runtime_config(self.request.user.tenant)
+        InventoryService.validate_warehouse_can_be_deleted(
+            warehouse=instance,
+            runtime_config=runtime_config,
+        )
+        instance.delete()
+
 class InventoryViewSet(BaseBusinessViewSet):
     module_key = MODULE_KEY
     queryset = Inventory.objects.all()
@@ -270,9 +291,8 @@ class InventoryViewSet(BaseBusinessViewSet):
 
         try:
             product = self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=product_id)
-            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
-            if warehouse.status is False:
-                return Response({"detail": "禁用仓库不能用于业务"}, status=status.HTTP_400_BAD_REQUEST)
+            policy = get_policy("inventory", user=request.user)
+            warehouse = policy.resolve_warehouse(warehouse_id)
             InventoryService.change_stock(
                 warehouse=warehouse,
                 product=product,

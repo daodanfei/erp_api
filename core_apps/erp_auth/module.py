@@ -51,6 +51,15 @@ MODULE = ModuleDefinition(
             "icon": "SafetyOutlined",
             "order": 104,
         },
+        {
+            "code": "system:log",
+            "name": "操作日志",
+            "parent": "system",
+            "path": "/system/logs",
+            "component": "system/LogList",
+            "icon": "HistoryOutlined",
+            "order": 105,
+        },
     ),
     permissions=(
         {"code": "user:create", "name": "新增用户", "parent": "system:user"},

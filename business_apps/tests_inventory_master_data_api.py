@@ -3,10 +3,12 @@ from types import SimpleNamespace
 from django.test import RequestFactory, TestCase
 
 from business_apps.inventory.models import Product, ProductCategory, Unit
+from business_apps.inventory.services import InventoryService
 from business_apps.inventory.serializers import ProductCategorySerializer, ProductSerializer, StocktakeSerializer
 from business_apps.inventory.models import Warehouse
 from business_apps.supply_chain.serializers import TransferOrderSerializer
 from business_apps.inventory.views import ProductCategoryViewSet
+from core_apps.tenant.models import Tenant
 
 
 class InventoryMasterDataValidationTest(TestCase):
@@ -139,3 +141,43 @@ class ProductCategoryDestroyGuardTest(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("存在下级分类", response.data["detail"])
+
+
+class WarehouseGuardTest(TestCase):
+    def _single_warehouse_runtime_config(self, tenant):
+        return SimpleNamespace(
+            tenant=tenant,
+            is_enabled=lambda module_key: module_key == "inventory",
+            is_feature_enabled=lambda module_key, feature_key: False,
+            get_default=lambda key, default=None, module_key=None: "MAIN",
+        )
+
+    def test_default_warehouse_cannot_be_disabled_in_single_warehouse_mode(self):
+        tenant = Tenant.objects.create(code="tenant-wh-guard", name="Tenant WH Guard", status="ACTIVE")
+        warehouse = Warehouse.objects.create(
+            tenant=tenant,
+            warehouse_code="MAIN",
+            warehouse_name="默认仓库",
+            status=True,
+        )
+
+        with self.assertRaisesMessage(ValueError, "不能停用默认仓库"):
+            InventoryService.validate_warehouse_can_be_disabled(
+                warehouse=warehouse,
+                runtime_config=self._single_warehouse_runtime_config(tenant),
+            )
+
+    def test_default_warehouse_cannot_be_deleted_in_single_warehouse_mode(self):
+        tenant = Tenant.objects.create(code="tenant-wh-delete", name="Tenant WH Delete", status="ACTIVE")
+        warehouse = Warehouse.objects.create(
+            tenant=tenant,
+            warehouse_code="MAIN",
+            warehouse_name="默认仓库",
+            status=True,
+        )
+
+        with self.assertRaisesMessage(ValueError, "不能删除默认仓库"):
+            InventoryService.validate_warehouse_can_be_deleted(
+                warehouse=warehouse,
+                runtime_config=self._single_warehouse_runtime_config(tenant),
+            )

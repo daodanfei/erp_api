@@ -15,6 +15,7 @@ FEATURE_MODULE_REQUIREMENTS = {
     ("accounting", "ar_ap_posting_enabled"): ("ar_receivable", "ap_payable"),
     ("accounting", "inventory_posting_enabled"): ("inventory",),
 }
+ALWAYS_ENABLED_BLUEPRINT_MODULES = ("system",)
 
 
 def _normalize_inventory_warehouse_rules(normalized: dict) -> None:
@@ -95,6 +96,9 @@ def validate_blueprint_config(config: dict | None) -> dict:
 
     module_keys = _registered_module_keys()
     enabled_modules = normalized["enabled_modules"]
+    for module_key in ALWAYS_ENABLED_BLUEPRINT_MODULES:
+        if module_key not in enabled_modules:
+            enabled_modules.append(module_key)
     if len(enabled_modules) != len(set(enabled_modules)):
         raise serializers.ValidationError("enabled_modules 不能重复")
     unknown_enabled = sorted(set(enabled_modules) - module_keys)

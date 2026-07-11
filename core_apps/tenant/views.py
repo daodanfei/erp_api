@@ -1,4 +1,5 @@
 from rest_framework import decorators, permissions, response, status, viewsets
+from rest_framework.exceptions import ValidationError
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
@@ -27,13 +28,16 @@ class TenantViewSet(viewsets.ModelViewSet):
     filterset_fields = ["code", "status", "industry"]
 
     def create(self, request, *args, **kwargs):
-        tenant = TenantService.create_tenant(
-            code=request.data.get("code", ""),
-            name=request.data["name"],
-            industry=request.data.get("industry", ""),
-            owner=request.user,
-            user_limit=request.data.get("user_limit"),
-        )
+        try:
+            tenant = TenantService.create_tenant(
+                code=request.data.get("code", ""),
+                name=request.data["name"],
+                industry=request.data.get("industry", ""),
+                owner=request.user,
+                user_limit=request.data.get("user_limit"),
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         serializer = self.get_serializer(tenant)
         return response.Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -41,21 +45,27 @@ class TenantViewSet(viewsets.ModelViewSet):
     def apply_version(self, request, pk=None):
         tenant = self.get_object()
         blueprint_version = get_object_or_404(SystemBlueprintVersion, pk=request.data["blueprint_version"])
-        snapshot = TenantService.apply_blueprint_version(tenant=tenant, blueprint_version=blueprint_version)
+        try:
+            snapshot = TenantService.apply_blueprint_version(tenant=tenant, blueprint_version=blueprint_version)
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         serializer = TenantConfigSnapshotSerializer(snapshot)
         return response.Response(serializer.data)
 
     @decorators.action(detail=False, methods=["post"], url_path="create-from-version")
     def create_from_version(self, request):
         blueprint_version = get_object_or_404(SystemBlueprintVersion, pk=request.data["blueprint_version"])
-        tenant = TenantService.create_from_blueprint_version(
-            code=request.data.get("code", ""),
-            name=request.data["name"],
-            blueprint_version=blueprint_version,
-            industry=request.data.get("industry", ""),
-            owner=request.user,
-            user_limit=request.data.get("user_limit"),
-        )
+        try:
+            tenant = TenantService.create_from_blueprint_version(
+                code=request.data.get("code", ""),
+                name=request.data["name"],
+                blueprint_version=blueprint_version,
+                industry=request.data.get("industry", ""),
+                owner=request.user,
+                user_limit=request.data.get("user_limit"),
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         serializer = self.get_serializer(tenant)
         return response.Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -66,11 +76,14 @@ class TenantViewSet(viewsets.ModelViewSet):
         blueprint_version = None
         if request.data.get("blueprint_version"):
             blueprint_version = get_object_or_404(SystemBlueprintVersion, pk=request.data["blueprint_version"])
-        result = TenantService.bind_instance_to_tenant(
-            tenant=tenant,
-            instance=instance,
-            blueprint_version=blueprint_version,
-        )
+        try:
+            result = TenantService.bind_instance_to_tenant(
+                tenant=tenant,
+                instance=instance,
+                blueprint_version=blueprint_version,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         return response.Response(
             {
                 "tenant": self.get_serializer(result.tenant).data,
@@ -137,6 +150,15 @@ class TenantViewSet(viewsets.ModelViewSet):
                 "created": created,
             }
         )
+
+    @decorators.action(detail=True, methods=["post"], url_path="clear-data")
+    def clear_data(self, request, pk=None):
+        tenant = self.get_object()
+        confirm_code = str(request.data.get("confirm_code", "")).strip()
+        if confirm_code != tenant.code:
+            raise ValidationError({"detail": "请输入正确的租户编码以确认清空操作"})
+        result = TenantService.clear_tenant_data(tenant=tenant)
+        return response.Response(result, status=status.HTTP_200_OK)
 
 
 class TenantUserViewSet(viewsets.ModelViewSet):

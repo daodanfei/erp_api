@@ -88,7 +88,14 @@ class OutboundService:
         for item in items_data:
             order_item = item['order_item']
             qty = Decimal(str(item['quantity']))
-            pending_qty = Decimal(str(order_item.quantity)) - Decimal(str(order_item.shipped_quantity))
+            from business_apps.sales.services import SalesOrderService
+
+            open_outbound_qty = SalesOrderService.get_open_outbound_quantity(order_item)
+            pending_qty = (
+                Decimal(str(order_item.quantity))
+                - Decimal(str(order_item.shipped_quantity))
+                - open_outbound_qty
+            )
 
             if order_item.order_id != order.id:
                 raise ValueError("出库明细与销售订单不匹配")

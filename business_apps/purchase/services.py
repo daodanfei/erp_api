@@ -23,6 +23,7 @@ from core_apps.policies.registry import get_policy
 
 class PurchaseOrderService:
     RECEIPT_EVENT_TYPE_EXECUTED = "PURCHASE_RECEIPT_EXECUTED"
+    THREE_DECIMAL_PLACES = Decimal("0.000")
 
     @staticmethod
     def normalize_expected_arrival_date(value):
@@ -70,6 +71,16 @@ class PurchaseOrderService:
         PurchaseOrderService.validate_products(
             [{'product': item.product} for item in order.items.select_related('product').all()]
         )
+
+    @staticmethod
+    def get_open_receipt_quantity(order_item, *, exclude_receipt_id=None):
+        queryset = PurchaseReceiptItem.objects.filter(
+            purchase_order_item=order_item,
+            receipt__status=PurchaseReceipt.STATUS_DRAFT,
+        )
+        if exclude_receipt_id is not None:
+            queryset = queryset.exclude(receipt_id=exclude_receipt_id)
+        return queryset.aggregate(total=Sum('received_quantity'))['total'] or Decimal('0')
 
     @staticmethod
     @transaction.atomic
@@ -326,16 +337,36 @@ class PurchaseOrderService:
         if order.status in [PurchaseOrder.STATUS_RECEIVED, PurchaseOrder.STATUS_CLOSED]:
             raise ValueError("订单已全部到货，无法创建入库单")
 
-        remaining_items = {
+        locked_items = {
             item.id: item
-            for item in order.items.all()
-            if item.received_quantity < item.quantity
+            for item in order.items.select_for_update().all()
         }
+        remaining_items = {}
+        fully_reserved_by_drafts = False
+        for item in locked_items.values():
+            pending_receipt_qty = PurchaseOrderService.get_open_receipt_quantity(item)
+            remaining_qty = item.quantity - item.received_quantity - pending_receipt_qty
+            if remaining_qty > 0:
+                remaining_items[item.id] = item
+            elif item.received_quantity < item.quantity and pending_receipt_qty > 0:
+                fully_reserved_by_drafts = True
         if not remaining_items:
+            if fully_reserved_by_drafts:
+                raise ValueError("采购订单待入库数量已被其他草稿入库单占用，请先完成或取消现有草稿入库单")
             raise ValueError("采购订单已无待入库明细")
 
+        requested_quantities: dict[int, Decimal] = {}
+        for item in items_data:
+            po_item = locked_items.get(item['purchase_order_item'].id)
+            if po_item is None:
+                raise ValueError("入库明细必须来自当前采购订单")
+            qty = Decimal(str(item['received_quantity']))
+            if qty <= 0:
+                raise ValueError("入库数量必须大于0")
+            requested_quantities[po_item.id] = requested_quantities.get(po_item.id, Decimal('0')) + qty
+
         if not policy.partial_receipt_enabled():
-            submitted_ids = {item["purchase_order_item"].id for item in items_data}
+            submitted_ids = set(requested_quantities.keys())
             remaining_ids = set(remaining_items.keys())
             if submitted_ids != remaining_ids:
                 raise ValueError("当前配置不允许部分入库，必须一次性完成全部待入库明细")
@@ -351,31 +382,33 @@ class PurchaseOrderService:
             **build_erp_user_fk_kwargs(PurchaseReceipt, user=user, field_names=("created_by",)),
         )
 
-        for item in items_data:
-            po_item = item['purchase_order_item']
-            qty = Decimal(str(item['received_quantity']))
-            if po_item.purchase_order_id != order.id:
-                raise ValueError("入库明细必须来自当前采购订单")
-            if qty <= 0:
-                raise ValueError("入库数量必须大于0")
-
-            # 超量入库校验
-            if (po_item.received_quantity + qty) > po_item.quantity:
-                remaining = po_item.quantity - po_item.received_quantity
+        for po_item_id, requested_qty in requested_quantities.items():
+            po_item = locked_items[po_item_id]
+            pending_receipt_qty = PurchaseOrderService.get_open_receipt_quantity(po_item)
+            remaining = po_item.quantity - po_item.received_quantity - pending_receipt_qty
+            if remaining < 0:
                 raise ValueError(
-                    f"入库数量超过采购数量：{po_item.product_name_snapshot}，"
-                    f"采购{po_item.quantity}，已入库{po_item.received_quantity}，"
-                    f"剩余可入库{remaining}，本次入库{qty}"
+                    f"草稿入库单占用数量异常：{po_item.product_name_snapshot} 已超出可入库数量，请先清理草稿入库单"
                 )
-
+            if requested_qty > remaining:
+                raise ValueError(
+                    f"入库数量超过剩余可入库数量：{po_item.product_name_snapshot}，"
+                    f"采购{po_item.quantity.quantize(PurchaseOrderService.THREE_DECIMAL_PLACES)}，"
+                    f"已完成入库{po_item.received_quantity.quantize(PurchaseOrderService.THREE_DECIMAL_PLACES)}，"
+                    f"其他草稿入库单已占用{pending_receipt_qty.quantize(PurchaseOrderService.THREE_DECIMAL_PLACES)}，"
+                    f"当前剩余可入库{remaining.quantize(PurchaseOrderService.THREE_DECIMAL_PLACES)}，"
+                    f"本次申请{requested_qty.quantize(PurchaseOrderService.THREE_DECIMAL_PLACES)}"
+                )
             if not policy.partial_receipt_enabled():
-                remaining = po_item.quantity - po_item.received_quantity
-                if qty != remaining:
+                if requested_qty != remaining:
                     raise ValueError(
                         f"当前配置不允许部分入库：{po_item.product_name_snapshot} 剩余待入库 {remaining}，"
                         f"本次必须全部入库"
                     )
 
+        for item in items_data:
+            po_item = locked_items[item['purchase_order_item'].id]
+            qty = Decimal(str(item['received_quantity']))
             # 保存商品快照
             PurchaseReceiptItem.objects.create(
                 tenant=receipt.tenant,

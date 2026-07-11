@@ -30,6 +30,22 @@ from .models import ERPDepartment, ERPPermission, ERPRole, ERPUser
 from .services import ERPUserProvisionService
 
 
+def build_system_module_config(**feature_overrides):
+    return {
+        "features": {
+            "user_management": True,
+            "department_management": True,
+            "role_management": True,
+            "operation_log": True,
+            "permission_management": False,
+            **feature_overrides,
+        },
+        "workflows": {},
+        "field_rules": {},
+        "defaults": {},
+    }
+
+
 def build_config():
     return {
         "basic": {
@@ -37,8 +53,9 @@ def build_config():
             "industry": "trade",
             "mode": "saas",
         },
-        "enabled_modules": ["platform", "inventory"],
+        "enabled_modules": ["system", "platform", "inventory"],
         "module_configs": {
+            "system": build_system_module_config(),
             "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "inventory": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
         },
@@ -52,8 +69,9 @@ def build_purchase_config():
             "industry": "trade",
             "mode": "saas",
         },
-        "enabled_modules": ["platform", "inventory", "purchase"],
+        "enabled_modules": ["system", "platform", "inventory", "purchase"],
         "module_configs": {
+            "system": build_system_module_config(),
             "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "inventory": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "purchase": {
@@ -75,6 +93,22 @@ def build_purchase_config():
     }
 
 
+def build_purchase_single_warehouse_config():
+    config = build_purchase_config()
+    config["module_configs"]["inventory"] = {
+        "features": {
+            "multi_warehouse": False,
+            "warehouse_required_on_transaction": False,
+        },
+        "workflows": {},
+        "field_rules": {},
+        "defaults": {
+            "default_warehouse_code": "MAIN",
+        },
+    }
+    return config
+
+
 def build_purchase_ap_config():
     return {
         "basic": {
@@ -82,8 +116,9 @@ def build_purchase_ap_config():
             "industry": "trade",
             "mode": "saas",
         },
-        "enabled_modules": ["platform", "inventory", "purchase", "ap_payable"],
+        "enabled_modules": ["system", "platform", "inventory", "purchase", "ap_payable"],
         "module_configs": {
+            "system": build_system_module_config(),
             "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "inventory": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "purchase": {
@@ -125,8 +160,9 @@ def build_sales_supply_chain_config():
             "industry": "trade",
             "mode": "saas",
         },
-        "enabled_modules": ["platform", "inventory", "sales", "supply_chain"],
+        "enabled_modules": ["system", "platform", "inventory", "sales", "supply_chain"],
         "module_configs": {
+            "system": build_system_module_config(),
             "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "inventory": {
                 "features": {
@@ -178,8 +214,9 @@ def build_crm_supplier_config():
             "industry": "trade",
             "mode": "saas",
         },
-        "enabled_modules": ["platform", "crm", "supplier"],
+        "enabled_modules": ["system", "platform", "crm", "supplier"],
         "module_configs": {
+            "system": build_system_module_config(),
             "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "crm": {
                 "features": {
@@ -218,8 +255,9 @@ def build_ar_finance_accounting_config():
             "industry": "trade",
             "mode": "saas",
         },
-        "enabled_modules": ["platform", "crm", "ar_receivable", "ap_payable", "finance", "accounting"],
+        "enabled_modules": ["system", "platform", "crm", "ar_receivable", "ap_payable", "finance", "accounting"],
         "module_configs": {
+            "system": build_system_module_config(),
             "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
             "crm": {
                 "features": {
@@ -709,6 +747,40 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertFalse(any(code.startswith("platform:dict") for code in permission_codes))
         self.assertFalse(any(code.startswith("platform:coderule") for code in permission_codes))
 
+    def test_system_feature_flags_filter_permissions_and_api_access(self):
+        limited_version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v-system-limited",
+            config_json={
+                **build_config(),
+                "module_configs": {
+                    **build_config()["module_configs"],
+                    "system": build_system_module_config(
+                        role_management=False,
+                        operation_log=False,
+                    ),
+                },
+            },
+            created_by=self.platform_user,
+            is_published=False,
+        )
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=limited_version)
+        self.login()
+
+        me_response = self.client.get("/api/erp-auth/me/")
+
+        self.assertEqual(me_response.status_code, status.HTTP_200_OK)
+        permission_codes = set(me_response.data["permissions"])
+        self.assertIn("system:user", permission_codes)
+        self.assertNotIn("system:role", permission_codes)
+        self.assertNotIn("system:log", permission_codes)
+
+        role_response = self.client.get("/api/erp-auth/roles/")
+        log_response = self.client.get("/api/system/logs/")
+
+        self.assertEqual(role_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(log_response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_create_user_respects_tenant_limit(self):
         self.login()
 
@@ -744,6 +816,36 @@ class ERPUserManagementApiTest(APITestCase):
 
         self.assertEqual(limit_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("租户用户数已达上限", str(limit_response.data))
+
+    def test_create_super_admin_user_auto_assigns_super_admin_role(self):
+        self.tenant.user_limit = 3
+        self.tenant.save(update_fields=["user_limit"])
+        self.login()
+
+        response = self.client.post(
+            "/api/erp-auth/users/",
+            {
+                "username": "tenant_admin_2",
+                "name": "租户管理员2",
+                "password": "tenant-admin-123",
+                "status": True,
+                "is_super_admin": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created_user = ERPUser.objects.prefetch_related("roles__permissions").get(
+            tenant=self.tenant,
+            username="tenant_admin_2",
+        )
+        self.assertTrue(created_user.is_super_admin)
+        self.assertTrue(created_user.roles.exists())
+        role = created_user.roles.first()
+        self.assertEqual(role.name, "租户超级管理员")
+        self.assertTrue(role.is_system)
+        self.assertEqual(role.data_scope, "ALL")
+        self.assertIn("system:user", set(role.permissions.values_list("code", flat=True)))
 
     def test_create_user_rejects_disabled_department(self):
         self.login()
@@ -937,6 +1039,91 @@ class ERPUserPurchaseFlowTest(TestCase):
         mock_generate_ap.assert_not_called()
         mock_post_purchase_receipt.assert_called_once()
 
+    def test_purchase_receipt_api_uses_default_warehouse_in_single_warehouse_mode(self):
+        single_version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v2",
+            config_json=build_purchase_single_warehouse_config(),
+            created_by=self.platform_user,
+            is_published=True,
+        )
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=single_version)
+        order = PurchaseOrderService.create_order(
+            supplier=self.supplier,
+            items_data=[
+                {
+                    "product": self.product,
+                    "warehouse": None,
+                    "quantity": "5.000",
+                    "unit_price": "10.00",
+                }
+            ],
+            user=self.erp_user,
+        )
+        PurchaseOrderService.submit_order(order, self.erp_user)
+        order.refresh_from_db()
+
+        client = APIClient()
+        client.force_authenticate(self.erp_user)
+        response = client.post(
+            "/api/purchase/receipts/",
+            {
+                "purchase_order": order.id,
+                "items": [
+                    {
+                        "purchase_order_item": order.items.get().id,
+                        "received_quantity": "5.000",
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["warehouse_name"], "默认仓库")
+
+    def test_purchase_receipt_rejects_when_other_draft_receipt_already_occupies_quantity(self):
+        order = PurchaseOrderService.create_order(
+            supplier=self.supplier,
+            items_data=[
+                {
+                    "product": self.product,
+                    "warehouse": self.warehouse,
+                    "quantity": "12.000",
+                    "unit_price": "10.00",
+                }
+            ],
+            user=self.erp_user,
+        )
+        PurchaseOrderService.submit_order(order, self.erp_user)
+        order.refresh_from_db()
+        po_item = order.items.get()
+
+        PurchaseOrderService.create_receipt(
+            order=order,
+            warehouse=self.warehouse,
+            items_data=[
+                {
+                    "purchase_order_item": po_item,
+                    "received_quantity": "12.000",
+                }
+            ],
+            user=self.erp_user,
+        )
+
+        with self.assertRaisesMessage(ValueError, "待入库数量已被其他草稿入库单占用"):
+            PurchaseOrderService.create_receipt(
+                order=order,
+                warehouse=self.warehouse,
+                items_data=[
+                    {
+                        "purchase_order_item": po_item,
+                        "received_quantity": "12.000",
+                    }
+                ],
+                user=self.erp_user,
+            )
+
 
 class ERPUserSalesOutboundFlowTest(TestCase):
     def setUp(self):
@@ -1077,6 +1264,34 @@ class ERPUserSalesOutboundFlowTest(TestCase):
         self.assertIsNone(shipping_tx.operator)
         mock_generate_ar.assert_not_called()
         mock_post_sales_outbound.assert_called_once()
+
+    def test_sales_order_rejects_quantity_exceeding_other_open_order_commitment(self):
+        SalesOrderService.create_order(
+            customer=self.customer,
+            items_data=[
+                {
+                    "product": self.product,
+                    "warehouse": self.warehouse,
+                    "quantity": "12.000",
+                    "unit_price": "15.00",
+                }
+            ],
+            user=self.erp_user,
+        )
+
+        with self.assertRaisesMessage(ValueError, "其他未完成销售单已占用12.000"):
+            SalesOrderService.create_order(
+                customer=self.customer,
+                items_data=[
+                    {
+                        "product": self.product,
+                        "warehouse": self.warehouse,
+                        "quantity": "9.000",
+                        "unit_price": "15.00",
+                    }
+                ],
+                user=self.erp_user,
+            )
 
 
 class ERPUserMasterDataApiTest(APITestCase):

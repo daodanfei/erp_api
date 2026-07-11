@@ -231,7 +231,9 @@ class ERPUserWriteSerializer(serializers.ModelSerializer):
             must_change_password=True,
             **validated_data,
         )
-        if role_ids:
+        if user.is_super_admin:
+            ERPUserProvisionService.ensure_super_admin_role(user=user)
+        elif role_ids:
             user.roles.set(ERPRole.objects.filter(tenant=tenant, id__in=role_ids))
         return user
 
@@ -248,7 +250,9 @@ class ERPUserWriteSerializer(serializers.ModelSerializer):
             update_fields.extend(["password", "must_change_password"])
         if update_fields:
             instance.save(update_fields=update_fields)
-        if role_ids is not None:
+        if instance.is_super_admin:
+            ERPUserProvisionService.ensure_super_admin_role(user=instance)
+        elif role_ids is not None:
             instance.roles.set(ERPRole.objects.filter(tenant=tenant, id__in=role_ids))
         return instance
 

@@ -96,6 +96,8 @@ class ConfigurationValidationTest(SimpleTestCase):
         )
 
         self.assertIn("inventory", result["module_configs"])
+        self.assertIn("system", result["enabled_modules"])
+        self.assertIn("system", result["module_configs"])
         self.assertIn("multi_warehouse", result["module_configs"]["inventory"]["features"])
         self.assertEqual(result["module_configs"]["inventory"]["defaults"]["default_warehouse_code"], "MAIN")
 
@@ -202,6 +204,32 @@ class ConfigurationValidationTest(SimpleTestCase):
         self.assertFalse(result["module_configs"]["platform"]["features"]["code_rule_center"])
         self.assertFalse(result["module_configs"]["reports"]["features"]["dashboard"])
         self.assertIn("sales_analysis", result["module_configs"]["reports"]["features"])
+
+    def test_validate_blueprint_config_fills_system_template(self):
+        result = validate_blueprint_config(
+            {
+                "basic": {
+                    "name": "system_runtime_erp",
+                    "industry": "trade",
+                    "mode": "saas",
+                },
+                "enabled_modules": ["system"],
+                "module_configs": {
+                    "system": {
+                        "features": {
+                            "role_management": False,
+                        },
+                        "workflows": {},
+                        "field_rules": {},
+                        "defaults": {},
+                    }
+                },
+            }
+        )
+
+        self.assertTrue(result["module_configs"]["system"]["features"]["user_management"])
+        self.assertFalse(result["module_configs"]["system"]["features"]["role_management"])
+        self.assertFalse(result["module_configs"]["system"]["features"]["permission_management"])
 
     def test_validate_blueprint_config_forces_warehouse_fields_visible_when_transactions_require_warehouse(self):
         result = validate_blueprint_config(

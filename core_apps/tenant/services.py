@@ -4,9 +4,18 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+from django.apps import apps
 from django.db import transaction
+from django.db.models import Q
+from django.db.models import ProtectedError
 from django.utils.text import slugify
 
+from business_apps.inventory.features import (
+    DEFAULT_WAREHOUSE_CODE,
+    FEATURE_MULTI_WAREHOUSE,
+    FEATURE_WAREHOUSE_REQUIRED_ON_TRANSACTION,
+)
+from business_apps.inventory.warehouse_utils import ensure_default_warehouse
 from core_apps.erp_auth.services import ERPAdminProvisionResult, ERPUserProvisionService
 from core_apps.erp_auth.models import ERPUser
 from core_apps.configuration import ConfigurationService, validate_blueprint_config
@@ -127,7 +136,78 @@ def build_runtime_config(tenant: Tenant) -> TenantRuntimeConfig:
     )
 
 
+def _get_inventory_transition_state(config_json: dict | None) -> dict[str, object]:
+    if not config_json:
+        normalized = {
+            "basic": {},
+            "enabled_modules": [],
+            "module_configs": {},
+        }
+    else:
+        normalized = validate_blueprint_config(config_json)
+    inventory_config = normalized["module_configs"].get("inventory", {})
+    inventory_features = inventory_config.get("features", {})
+    inventory_defaults = inventory_config.get("defaults", {})
+    return {
+        "normalized": normalized,
+        "multi_warehouse": bool(inventory_features.get(FEATURE_MULTI_WAREHOUSE, False)),
+        "warehouse_required": bool(inventory_features.get(FEATURE_WAREHOUSE_REQUIRED_ON_TRANSACTION, False)),
+        "default_warehouse_code": inventory_defaults.get(DEFAULT_WAREHOUSE_CODE) or "MAIN",
+    }
+
+
+def _validate_inventory_mode_transition(*, tenant: Tenant, current_config_json: dict | None, next_config_json: dict) -> None:
+    current_state = _get_inventory_transition_state(current_config_json)
+    next_state = _get_inventory_transition_state(next_config_json)
+    current_single_warehouse = not current_state["multi_warehouse"] and not current_state["warehouse_required"]
+    next_requires_explicit_warehouse = bool(next_state["multi_warehouse"] or next_state["warehouse_required"])
+    if not current_single_warehouse or not next_requires_explicit_warehouse:
+        return
+
+    from business_apps.purchase.models import PurchaseOrder, PurchaseOrderItem
+    from business_apps.sales.models import SalesOrder, SalesOrderItem
+
+    purchase_missing_count = PurchaseOrderItem.objects.filter(
+        tenant=tenant,
+        warehouse__isnull=True,
+        purchase_order__status__in=(
+            PurchaseOrder.STATUS_DRAFT,
+            PurchaseOrder.STATUS_PENDING_APPROVAL,
+            PurchaseOrder.STATUS_APPROVED,
+            PurchaseOrder.STATUS_REJECTED,
+        ),
+    ).count()
+    sales_missing_count = SalesOrderItem.objects.filter(
+        tenant=tenant,
+        warehouse__isnull=True,
+        order__status__in=(
+            SalesOrder.STATUS_DRAFT,
+            SalesOrder.STATUS_PENDING_APPROVAL,
+            SalesOrder.STATUS_APPROVED,
+            SalesOrder.STATUS_REJECTED,
+            SalesOrder.STATUS_ALLOCATED,
+        ),
+    ).count()
+    if purchase_missing_count or sales_missing_count:
+        raise ValueError(
+            "切换为多仓/按单据选仓前校验失败："
+            f"仍有 {purchase_missing_count} 条采购明细、{sales_missing_count} 条销售明细未绑定仓库。"
+            "请先清理或删除这些在途单据后再切换。"
+        )
+
+
+def _should_auto_create_default_warehouse(inventory_state: dict[str, object]) -> bool:
+    return not bool(inventory_state["multi_warehouse"]) and not bool(inventory_state["warehouse_required"])
+
+
 class TenantService:
+    PURGE_EXCLUDED_MODELS = {
+        ("tenant", "Tenant"),
+        ("tenant", "TenantConfigSnapshot"),
+        ("tenant", "TenantModuleState"),
+        ("tenant", "TenantUser"),
+    }
+
     @staticmethod
     @transaction.atomic
     def create_tenant(
@@ -151,6 +231,7 @@ class TenantService:
         )
         if owner is not None:
             TenantUser.objects.create(tenant=tenant, user=owner, is_owner=True, is_default=True)
+        ensure_default_warehouse(tenant=tenant, configured_code="MAIN")
         return tenant
 
     @staticmethod
@@ -208,6 +289,12 @@ class TenantService:
     @transaction.atomic
     def apply_blueprint_version(*, tenant: Tenant, blueprint_version: SystemBlueprintVersion):
         normalized = validate_blueprint_config(blueprint_version.config_json)
+        current_snapshot = get_latest_tenant_snapshot(tenant)
+        _validate_inventory_mode_transition(
+            tenant=tenant,
+            current_config_json=current_snapshot.config_json if current_snapshot is not None else None,
+            next_config_json=normalized,
+        )
         snapshot = TenantConfigSnapshot.objects.create(
             tenant=tenant,
             blueprint_version=blueprint_version,
@@ -228,6 +315,10 @@ class TenantService:
             elif state.enabled != enabled:
                 state.enabled = enabled
                 state.save(update_fields=["enabled"])
+        ensure_default_warehouse(
+            tenant=tenant,
+            configured_code=normalized["module_configs"].get("inventory", {}).get("defaults", {}).get(DEFAULT_WAREHOUSE_CODE),
+        )
         return snapshot
 
     @staticmethod
@@ -262,6 +353,111 @@ class TenantService:
             snapshot=snapshot,
             initial_admin=initial_admin,
         )
+
+    @staticmethod
+    def _iter_purgeable_tenant_models():
+        models = []
+        for model in apps.get_models():
+            if (model._meta.app_label, model.__name__) in TenantService.PURGE_EXCLUDED_MODELS:
+                continue
+            if TenantService._iter_tenant_lookup_paths(model):
+                models.append(model)
+        return models
+
+    @staticmethod
+    def _iter_tenant_lookup_paths(model, *, max_depth: int = 4) -> list[str]:
+        paths: set[str] = set()
+        queue: list[tuple[type, list[str], set[type]]] = [(model, [], {model})]
+
+        while queue:
+            current_model, prefix, visited_models = queue.pop(0)
+            for field in current_model._meta.get_fields():
+                if not getattr(field, "is_relation", False):
+                    continue
+                if not getattr(field, "many_to_one", False) and not getattr(field, "one_to_one", False):
+                    continue
+                remote_model = getattr(getattr(field, "remote_field", None), "model", None)
+                if remote_model is None:
+                    continue
+
+                path_segments = [*prefix, field.name]
+                path = "__".join(path_segments)
+                if remote_model is Tenant:
+                    paths.add(path)
+                    continue
+                if len(path_segments) >= max_depth:
+                    continue
+                if remote_model in visited_models:
+                    continue
+                queue.append((remote_model, path_segments, {remote_model, *visited_models}))
+
+        return sorted(paths)
+
+    @staticmethod
+    def _tenant_scoped_queryset(*, model, tenant: Tenant):
+        lookup_paths = TenantService._iter_tenant_lookup_paths(model)
+        if not lookup_paths:
+            return model.objects.none()
+
+        query = Q()
+        for path in lookup_paths:
+            query |= Q(**{path: tenant})
+        return model.objects.filter(query).distinct()
+
+    @staticmethod
+    @transaction.atomic
+    def clear_tenant_data(*, tenant: Tenant) -> dict[str, object]:
+        deleted_summary: dict[str, int] = {}
+        purgeable_models = TenantService._iter_purgeable_tenant_models()
+        remaining_models = list(purgeable_models)
+
+        while remaining_models:
+            progressed = False
+            blocked_models = []
+            for model in remaining_models:
+                queryset = TenantService._tenant_scoped_queryset(model=model, tenant=tenant)
+                count = queryset.count()
+                if count <= 0:
+                    progressed = True
+                    continue
+                try:
+                    queryset.delete()
+                except ProtectedError:
+                    blocked_models.append(model)
+                    continue
+                deleted_summary[f"{model._meta.app_label}.{model.__name__}"] = (
+                    deleted_summary.get(f"{model._meta.app_label}.{model.__name__}", 0) + count
+                )
+                progressed = True
+
+            if not blocked_models:
+                break
+            if not progressed:
+                blocked_names = ", ".join(
+                    sorted(f"{model._meta.app_label}.{model.__name__}" for model in blocked_models)
+                )
+                raise ValueError(f"清空租户数据失败，仍存在受保护引用未解除：{blocked_names}")
+            remaining_models = blocked_models
+
+        config_json = tenant.active_config_snapshot.config_json if tenant.active_config_snapshot is not None else None
+        inventory_state = _get_inventory_transition_state(config_json)
+        if _should_auto_create_default_warehouse(inventory_state):
+            ensure_default_warehouse(
+                tenant=tenant,
+                configured_code=inventory_state["default_warehouse_code"],
+            )
+        provision_result = ERPUserProvisionService.ensure_tenant_super_admin(tenant=tenant)
+        return {
+            "tenant_id": tenant.id,
+            "tenant_code": tenant.code,
+            "deleted_models": deleted_summary,
+            "initial_admin": {
+                "user_id": provision_result.user.id,
+                "username": provision_result.user.username,
+                "created": provision_result.created,
+                "initial_password": provision_result.initial_password,
+            },
+        }
 
     @staticmethod
     def get_runtime_config(tenant: Tenant):

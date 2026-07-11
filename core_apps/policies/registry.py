@@ -26,6 +26,7 @@ DEFAULT_RUNTIME_CONFIG_JSON = {
         "mode": "saas",
     },
     "enabled_modules": [
+        "system",
         "platform",
         "crm",
         "inventory",
@@ -41,6 +42,9 @@ DEFAULT_RUNTIME_CONFIG_JSON = {
     ],
     "module_configs": {
         **MODULE_CONFIGURATION_CATALOG,
+        "system": {
+            **MODULE_CONFIGURATION_CATALOG["system"],
+        },
         "inventory": {
             **MODULE_CONFIGURATION_CATALOG["inventory"],
             "features": {

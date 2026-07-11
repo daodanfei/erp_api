@@ -3,11 +3,12 @@ from decimal import Decimal
 from django.db import transaction, models
 from django.utils import timezone
 from core_apps.erp_auth.models import ERPUser
-from .models import Product, Inventory, InventoryTransaction, Stocktake, StocktakeItem
+from .models import Product, Warehouse, Inventory, InventoryTransaction, Stocktake, StocktakeItem
 from business_apps.platform.services import CodeRuleService
 from business_apps.inventory.policies import InventoryPolicy
 from core_apps.erp_auth.compat import build_erp_user_fk_kwargs
 from core_apps.policies.registry import get_policy
+from .warehouse_utils import find_default_warehouse
 
 COMMON_UNIT_NAMES = [
     "个",
@@ -402,6 +403,75 @@ class InventoryService:
             'adjustment_count': len(adjustments),
             'adjustments': adjustments,
         }
+
+    @staticmethod
+    def get_default_warehouse(*, tenant, runtime_config=None):
+        default_code = "MAIN"
+        if runtime_config is not None:
+            policy = InventoryPolicy(runtime_config)
+            default_code = policy.get_default_warehouse_code() or "MAIN"
+        return find_default_warehouse(tenant=tenant, configured_code=default_code, active_only=False)
+
+    @staticmethod
+    def validate_warehouse_can_be_disabled(*, warehouse: Warehouse, runtime_config) -> None:
+        default_warehouse = InventoryService.get_default_warehouse(tenant=warehouse.tenant, runtime_config=runtime_config)
+        policy = InventoryPolicy(runtime_config)
+        if (
+            default_warehouse is not None
+            and default_warehouse.id == warehouse.id
+            and not policy.is_multi_warehouse_enabled()
+            and not policy.warehouse_required_on_transaction()
+        ):
+            raise ValueError("单仓模式下不能停用默认仓库，请先调整蓝图默认仓库或切换仓库模式")
+
+        if Inventory.objects.filter(warehouse=warehouse).exclude(current_qty=0, locked_qty=0).exists():
+            raise ValueError("仓库仍有库存或锁定库存，不能停用")
+
+        if Stocktake.objects.filter(warehouse=warehouse, status__in=("DRAFT", "IN_PROGRESS")).exists():
+            raise ValueError("仓库仍有关联的草稿/进行中盘点单，不能停用")
+
+    @staticmethod
+    def validate_warehouse_can_be_deleted(*, warehouse: Warehouse, runtime_config) -> None:
+        default_warehouse = InventoryService.get_default_warehouse(tenant=warehouse.tenant, runtime_config=runtime_config)
+        policy = InventoryPolicy(runtime_config)
+        if (
+            default_warehouse is not None
+            and default_warehouse.id == warehouse.id
+            and not policy.is_multi_warehouse_enabled()
+            and not policy.warehouse_required_on_transaction()
+        ):
+            raise ValueError("单仓模式下不能删除默认仓库，请先调整蓝图默认仓库或切换仓库模式")
+
+        if Inventory.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已存在库存台账记录，不能删除")
+        if InventoryTransaction.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已存在库存流水记录，不能删除")
+        if Stocktake.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已存在盘点单记录，不能删除")
+
+        from business_apps.purchase.models import PurchaseOrderItem, PurchaseReceipt
+        from business_apps.sales.models import SalesOrderItem
+        from business_apps.supply_chain.models import (
+            OutboundOrder,
+            PurchaseReturnOrder,
+            SalesReturnOrder,
+            TransferOrder,
+        )
+
+        if PurchaseOrderItem.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已被采购订单明细引用，不能删除")
+        if PurchaseReceipt.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已被采购入库单引用，不能删除")
+        if SalesOrderItem.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已被销售订单明细引用，不能删除")
+        if OutboundOrder.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已被销售出库单引用，不能删除")
+        if TransferOrder.objects.filter(models.Q(from_warehouse=warehouse) | models.Q(to_warehouse=warehouse)).exists():
+            raise ValueError("仓库已被调拨单引用，不能删除")
+        if SalesReturnOrder.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已被销售退货单引用，不能删除")
+        if PurchaseReturnOrder.objects.filter(warehouse=warehouse).exists():
+            raise ValueError("仓库已被采购退货单引用，不能删除")
 
 
 class UnitService:

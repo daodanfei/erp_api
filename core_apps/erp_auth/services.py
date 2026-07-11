@@ -22,6 +22,32 @@ ERP_DEFAULT_HIDDEN_PERMISSION_PREFIXES = (
     "platform:coderule",
 )
 
+SYSTEM_FEATURE_PERMISSION_CODES = {
+    "user_management": {
+        "system:user",
+        "user:create",
+        "user:update",
+        "user:delete",
+    },
+    "department_management": {
+        "system:dept",
+    },
+    "role_management": {
+        "system:role",
+    },
+    "operation_log": {
+        "system:log",
+    },
+    "permission_management": {
+        "system:perm",
+    },
+}
+SYSTEM_MANAGED_PERMISSION_CODES = {
+    code
+    for permission_codes in SYSTEM_FEATURE_PERMISSION_CODES.values()
+    for code in permission_codes
+} | {"system"}
+
 
 def generate_erp_role_code(*, tenant_code: str, role_name: str) -> str:
     base = slugify(role_name, allow_unicode=False).replace("_", "-").strip("-") or "role"
@@ -81,11 +107,21 @@ def get_enabled_erp_permission_codes(*, tenant) -> set[str]:
     runtime_config = TenantService.get_runtime_config(tenant)
     enabled_modules = set(runtime_config.enabled_modules())
     enabled_modules.add("erp_auth")
-    return {
+    enabled_codes = {
         definition["code"]
         for module_key, definition in _iter_erp_permission_definitions()
         if module_key in enabled_modules and not _is_hidden_for_erp(definition["code"])
     }
+    enabled_codes -= SYSTEM_MANAGED_PERMISSION_CODES
+    if runtime_config.is_enabled("system"):
+        system_feature_codes = set()
+        for feature_key, permission_codes in SYSTEM_FEATURE_PERMISSION_CODES.items():
+            if runtime_config.is_feature_enabled("system", feature_key):
+                system_feature_codes.update(permission_codes)
+        if system_feature_codes:
+            system_feature_codes.add("system")
+        enabled_codes |= system_feature_codes
+    return enabled_codes
 
 
 def sync_erp_permissions() -> dict[str, ERPPermission]:
@@ -165,7 +201,8 @@ class ERPUserProvisionService:
 
     @staticmethod
     @transaction.atomic
-    def ensure_tenant_super_admin(*, tenant, username: str = "admin") -> ERPAdminProvisionResult:
+    def ensure_super_admin_role(*, user: ERPUser) -> ERPRole:
+        tenant = user.tenant
         permission_map = sync_erp_permissions()
         enabled_codes = get_enabled_erp_permission_codes(tenant=tenant)
         all_permissions = [
@@ -173,20 +210,26 @@ class ERPUserProvisionService:
             for code, permission in permission_map.items()
             if code in enabled_codes and permission.status
         ]
+        role = user.roles.filter(is_system=True, data_scope="ALL").order_by("id").first()
+        if role is None:
+            role = ERPRole.objects.create(
+                tenant=tenant,
+                name="租户超级管理员",
+                code=generate_erp_role_code(tenant_code=tenant.code, role_name="tenant-admin"),
+                data_scope="ALL",
+                status=True,
+                is_system=True,
+            )
+        role.permissions.set(all_permissions)
+        user.roles.add(role)
+        return role
+
+    @staticmethod
+    @transaction.atomic
+    def ensure_tenant_super_admin(*, tenant, username: str = "admin") -> ERPAdminProvisionResult:
         existing_user = ERPUserProvisionService.get_tenant_super_admin(tenant=tenant)
         if existing_user is not None:
-            existing_role = existing_user.roles.order_by("id").first()
-            if existing_role is None:
-                existing_role = ERPRole.objects.create(
-                    tenant=tenant,
-                    name="租户超级管理员",
-                    code=generate_erp_role_code(tenant_code=tenant.code, role_name="tenant-admin"),
-                    data_scope="ALL",
-                    status=True,
-                    is_system=True,
-                )
-            existing_role.permissions.set(all_permissions)
-            existing_user.roles.add(existing_role)
+            existing_role = ERPUserProvisionService.ensure_super_admin_role(user=existing_user)
             return ERPAdminProvisionResult(
                 user=existing_user,
                 role=existing_role,
@@ -194,15 +237,6 @@ class ERPUserProvisionService:
                 created=False,
             )
 
-        role = ERPRole.objects.create(
-            tenant=tenant,
-            name="租户超级管理员",
-            code=generate_erp_role_code(tenant_code=tenant.code, role_name="tenant-admin"),
-            data_scope="ALL",
-            status=True,
-            is_system=True,
-        )
-        role.permissions.set(all_permissions)
         ERPUserProvisionService.ensure_tenant_user_capacity(tenant=tenant)
         initial_password = generate_initial_erp_password()
         user = ERPUser.objects.create_user(
@@ -214,6 +248,7 @@ class ERPUserProvisionService:
             is_super_admin=True,
             must_change_password=True,
         )
+        role = ERPUserProvisionService.ensure_super_admin_role(user=user)
         user.roles.add(role)
         return ERPAdminProvisionResult(
             user=user,

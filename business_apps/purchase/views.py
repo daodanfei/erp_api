@@ -238,7 +238,9 @@ class PurchaseReceiptViewSet(BaseBusinessViewSet):
                     'remark': item.get('remark', ''),
                 })
 
-            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
+            warehouse = None
+            if warehouse_id not in (None, ""):
+                warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
             receipt = PurchaseOrderService.create_receipt(order, warehouse, processed_items, request.user, remark)
             serializer = self.get_serializer(receipt)
             return Response(serializer.data, status=status.HTTP_201_CREATED)

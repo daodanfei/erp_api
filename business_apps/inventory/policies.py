@@ -3,6 +3,7 @@ from __future__ import annotations
 from business_apps.inventory.models import Warehouse
 from core_apps.policies.base import BasePolicy
 
+from .warehouse_utils import find_default_warehouse
 from .features import (
     DEFAULT_WAREHOUSE_CODE,
     FEATURE_BATCH_TRACKING,
@@ -59,11 +60,14 @@ class InventoryPolicy(BasePolicy):
             return self._load_warehouse(input_warehouse)
 
         default_code = self.get_default(DEFAULT_WAREHOUSE_CODE)
+        tenant = getattr(self.runtime_config, "tenant", None)
         warehouse = None
-        if default_code:
-            warehouse = Warehouse.objects.filter(warehouse_code=default_code, status=True).first()
-        if warehouse is None:
-            warehouse = Warehouse.objects.filter(status=True).order_by("type", "id").first()
+        if tenant is not None:
+            warehouse = find_default_warehouse(
+                tenant=tenant,
+                configured_code=default_code,
+                active_only=True,
+            )
         if warehouse is None:
             raise ValueError("未找到可用默认仓库，请先配置仓库")
         return warehouse
@@ -80,10 +84,14 @@ class InventoryPolicy(BasePolicy):
 
     def _load_warehouse(self, value):
         if isinstance(value, Warehouse):
-            return value
-        queryset = Warehouse.objects.all()
-        if self.user is not None:
-            from core_apps.common.viewsets import apply_erp_tenant_scope
+            warehouse = value
+        else:
+            queryset = Warehouse.objects.filter(status=True)
+            if self.user is not None:
+                from core_apps.common.viewsets import apply_erp_tenant_scope
 
-            queryset = apply_erp_tenant_scope(queryset, user=self.user)
-        return queryset.get(id=value)
+                queryset = apply_erp_tenant_scope(queryset, user=self.user)
+            warehouse = queryset.get(id=value)
+        if warehouse.status is False:
+            raise ValueError("禁用仓库不能用于业务")
+        return warehouse

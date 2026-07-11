@@ -1,6 +1,6 @@
 from rest_framework import mixins, permissions, viewsets
 
-from core_apps.common.permissions import ERPUserOnly
+from core_apps.common.permissions import ERPActionPermission, ERPUserOnly
 from core_apps.common.viewsets import apply_erp_tenant_scope
 from .models import OperationLog
 from .serializers import OperationLogSerializer
@@ -9,8 +9,12 @@ from .serializers import OperationLogSerializer
 class OperationLogViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     queryset = OperationLog.objects.all()
     serializer_class = OperationLogSerializer
-    permission_classes = [permissions.IsAuthenticated, ERPUserOnly]
+    permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     filterset_fields = ["erp_user", "method", "status_code"]
+    permission_map = {
+        "list": "system:log",
+        "retrieve": "system:log",
+    }
 
     def get_queryset(self):
         queryset = apply_erp_tenant_scope(super().get_queryset(), user=self.request.user)

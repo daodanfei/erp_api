@@ -1,8 +1,14 @@
 from rest_framework import status
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from business_apps.inventory.models import Product, ProductCategory, Unit, Warehouse
+from business_apps.crm.models import Customer
+from business_apps.purchase.models import PurchaseOrder, PurchaseOrderItem
+from business_apps.sales.models import SalesOrder, SalesOrderItem
+from business_apps.supplier.models import Supplier
 from core_apps.authentication.models import User
 from core_apps.blueprints.models import SystemBlueprint, SystemBlueprintVersion, SystemInstance
 from core_apps.erp_auth.models import ERPUser
@@ -114,6 +120,301 @@ class TenantServiceTest(TestCase):
         Tenant.objects.create(code="tenant-a", name="Tenant A", status="ACTIVE")
 
         self.assertEqual(generate_tenant_code("Tenant A"), "tenant-a-2")
+
+    def test_create_tenant_auto_creates_default_warehouse(self):
+        tenant = TenantService.create_tenant(code="tenant-auto-wh", name="Tenant Auto WH")
+
+        warehouse = Warehouse.objects.get(tenant=tenant)
+        self.assertEqual(warehouse.warehouse_code, "MAIN")
+        self.assertEqual(warehouse.warehouse_name, "默认仓库")
+        self.assertTrue(warehouse.status)
+
+    def test_create_second_tenant_uses_tenant_prefixed_default_warehouse_code_when_main_is_taken(self):
+        TenantService.create_tenant(code="tenant-main-a", name="Tenant Main A")
+
+        tenant_b = TenantService.create_tenant(code="tenant-main-b", name="Tenant Main B")
+
+        warehouse = Warehouse.objects.get(tenant=tenant_b)
+        self.assertEqual(warehouse.warehouse_code, "TENANT-MAIN-B-MAIN")
+
+    def test_apply_blueprint_version_auto_creates_configured_default_warehouse(self):
+        custom_version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v-custom-wh",
+            config_json={
+                "basic": {
+                    "name": "custom_wh",
+                    "industry": "trade",
+                    "mode": "saas",
+                },
+                "enabled_modules": ["inventory"],
+                "module_configs": {
+                    "inventory": {
+                        "features": {
+                            "multi_warehouse": False,
+                            "warehouse_required_on_transaction": False,
+                        },
+                        "workflows": {},
+                        "field_rules": {},
+                        "defaults": {"default_warehouse_code": "W001"},
+                    }
+                },
+            },
+            created_by=self.user,
+        )
+
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=custom_version)
+
+        self.assertTrue(Warehouse.objects.filter(tenant=self.tenant, warehouse_code="W001", status=True).exists())
+
+    def test_apply_blueprint_version_blocks_switch_to_multi_warehouse_when_open_items_have_no_warehouse(self):
+        category = ProductCategory.objects.create(name="默认分类", status=True, tenant=self.tenant)
+        unit = Unit.objects.create(name="件", code="UNIT-TENANT-001", status=True, tenant=self.tenant)
+        supplier = Supplier.objects.create(
+            tenant=self.tenant,
+            supplier_code="SUP-TENANT-001",
+            supplier_name="默认供应商",
+            status="ACTIVE",
+        )
+        product = Product.objects.create(
+            tenant=self.tenant,
+            product_code="PRO-TENANT-001",
+            name="测试商品",
+            category=category,
+            unit=unit,
+            status="ACTIVE",
+        )
+        purchase_order = PurchaseOrder.objects.create(
+            tenant=self.tenant,
+            purchase_order_no="PO-TENANT-001",
+            supplier=supplier,
+            status=PurchaseOrder.STATUS_DRAFT,
+        )
+        PurchaseOrderItem.objects.create(
+            tenant=self.tenant,
+            purchase_order=purchase_order,
+            product=product,
+            warehouse=None,
+            quantity=1,
+            unit_price=10,
+            amount=10,
+        )
+        multi_wh_version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v-multi-wh",
+            config_json={
+                "basic": {
+                    "name": "multi_wh",
+                    "industry": "trade",
+                    "mode": "saas",
+                },
+                "enabled_modules": ["platform", "inventory", "purchase", "supplier"],
+                "module_configs": {
+                    "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
+                    "inventory": {
+                        "features": {
+                            "multi_warehouse": True,
+                            "warehouse_required_on_transaction": True,
+                        },
+                        "workflows": {},
+                        "field_rules": {},
+                        "defaults": {"default_warehouse_code": "MAIN"},
+                    },
+                    "purchase": {
+                        "features": {"approval": False},
+                        "workflows": {"purchase_order_submit": "auto_approve"},
+                        "field_rules": {},
+                        "defaults": {"default_currency": "CNY"},
+                    },
+                    "supplier": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {"default_currency": "CNY"}},
+                },
+            },
+            created_by=self.user,
+        )
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=self.version_v1)
+
+        with self.assertRaisesMessage(ValueError, "未绑定仓库"):
+            TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=multi_wh_version)
+
+    def test_clear_tenant_data_keeps_tenant_snapshot_and_recreates_admin_and_default_warehouse(self):
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=self.version_v1)
+        ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="operator",
+            password="operator-123",
+            status=True,
+            must_change_password=False,
+        )
+        Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="TEMP-WH-001",
+            warehouse_name="临时仓",
+            status=True,
+        )
+
+        result = TenantService.clear_tenant_data(tenant=self.tenant)
+
+        self.tenant.refresh_from_db()
+        self.assertEqual(self.tenant.active_blueprint_version.id, self.version_v1.id)
+        self.assertEqual(self.tenant.erp_users.count(), 1)
+        self.assertEqual(self.tenant.erp_users.first().username, "admin")
+        self.assertTrue(self.tenant.warehouses.filter(status=True).exists())
+        self.assertTrue(self.tenant.warehouses.filter(warehouse_name="默认仓库").exists())
+        self.assertIn("initial_admin", result)
+
+    def test_clear_tenant_data_does_not_recreate_default_warehouse_for_multi_warehouse_blueprint(self):
+        multi_wh_version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v-clear-multi-wh",
+            config_json={
+                "basic": {
+                    "name": "multi_wh_clear",
+                    "industry": "trade",
+                    "mode": "saas",
+                },
+                "enabled_modules": ["platform", "inventory"],
+                "module_configs": {
+                    "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
+                    "inventory": {
+                        "features": {
+                            "multi_warehouse": True,
+                            "warehouse_required_on_transaction": True,
+                        },
+                        "workflows": {},
+                        "field_rules": {},
+                        "defaults": {"default_warehouse_code": "MAIN"},
+                    },
+                },
+            },
+            created_by=self.user,
+        )
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=multi_wh_version)
+        Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="WH-CLEAR-001",
+            warehouse_name="业务仓",
+            status=True,
+        )
+
+        TenantService.clear_tenant_data(tenant=self.tenant)
+
+        self.tenant.refresh_from_db()
+        self.assertFalse(self.tenant.warehouses.exists())
+        self.assertEqual(self.tenant.erp_users.count(), 1)
+        self.assertEqual(self.tenant.erp_users.first().username, "admin")
+
+    def test_clear_tenant_data_deletes_protected_warehouse_dependencies_before_warehouse(self):
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=self.version_v1)
+        category = ProductCategory.objects.create(name="销售分类", status=True, tenant=self.tenant)
+        unit = Unit.objects.create(name="件", code="UNIT-TENANT-002", status=True, tenant=self.tenant)
+        warehouse = Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="WH-SALES-CLEAR-001",
+            warehouse_name="销售仓",
+            status=True,
+        )
+        product = Product.objects.create(
+            tenant=self.tenant,
+            product_code="PRO-TENANT-002",
+            name="销售商品",
+            category=category,
+            unit=unit,
+            status="ACTIVE",
+        )
+        customer = Customer.objects.create(
+            tenant=self.tenant,
+            customer_code="CUS-TENANT-002",
+            customer_name="销售客户",
+            status="ACTIVE",
+        )
+        sales_order = SalesOrder.objects.create(
+            tenant=self.tenant,
+            order_no="SO-TENANT-001",
+            customer=customer,
+            status=SalesOrder.STATUS_DRAFT,
+        )
+        SalesOrderItem.objects.create(
+            order=sales_order,
+            product=product,
+            warehouse=warehouse,
+            quantity=1,
+            unit_price=10,
+            amount=10,
+        )
+
+        TenantService.clear_tenant_data(tenant=self.tenant)
+
+        self.assertEqual(SalesOrderItem.objects.filter(order__tenant=self.tenant).count(), 0)
+        self.assertTrue(self.tenant.warehouses.filter(warehouse_name="默认仓库").exists())
+
+    def test_business_detail_model_auto_infers_tenant_from_parent_document(self):
+        category = ProductCategory.objects.create(name="自动继承分类", status=True, tenant=self.tenant)
+        unit = Unit.objects.create(name="件", code="UNIT-TENANT-AUTO", status=True, tenant=self.tenant)
+        customer = Customer.objects.create(
+            tenant=self.tenant,
+            customer_code="CUS-TENANT-AUTO",
+            customer_name="自动继承客户",
+            status="ACTIVE",
+        )
+        product = Product.objects.create(
+            tenant=self.tenant,
+            product_code="PRO-TENANT-AUTO",
+            name="自动继承商品",
+            category=category,
+            unit=unit,
+            status="ACTIVE",
+        )
+        sales_order = SalesOrder.objects.create(
+            tenant=self.tenant,
+            order_no="SO-TENANT-AUTO",
+            customer=customer,
+            status=SalesOrder.STATUS_DRAFT,
+        )
+
+        item = SalesOrderItem.objects.create(
+            order=sales_order,
+            product=product,
+            quantity=1,
+            unit_price=10,
+            amount=10,
+        )
+
+        self.assertEqual(item.tenant_id, self.tenant.id)
+
+    def test_business_detail_model_rejects_cross_tenant_relation(self):
+        other_tenant = Tenant.objects.create(code="tenant-service-c", name="Tenant Service C", status="ACTIVE")
+        other_category = ProductCategory.objects.create(name="跨租户分类", status=True, tenant=other_tenant)
+        other_unit = Unit.objects.create(name="箱", code="UNIT-TENANT-CROSS", status=True, tenant=other_tenant)
+        customer = Customer.objects.create(
+            tenant=self.tenant,
+            customer_code="CUS-TENANT-CROSS",
+            customer_name="跨租户客户",
+            status="ACTIVE",
+        )
+        product = Product.objects.create(
+            tenant=other_tenant,
+            product_code="PRO-TENANT-CROSS",
+            name="跨租户商品",
+            category=other_category,
+            unit=other_unit,
+            status="ACTIVE",
+        )
+        sales_order = SalesOrder.objects.create(
+            tenant=self.tenant,
+            order_no="SO-TENANT-CROSS",
+            customer=customer,
+            status=SalesOrder.STATUS_DRAFT,
+        )
+
+        with self.assertRaises(ValidationError):
+            SalesOrderItem.objects.create(
+                tenant=self.tenant,
+                order=sales_order,
+                product=product,
+                quantity=1,
+                unit_price=10,
+                amount=10,
+            )
 
 
 class TenantApiTest(APITestCase):

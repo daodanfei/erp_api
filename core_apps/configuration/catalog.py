@@ -17,6 +17,19 @@ def module_config_template(
 
 
 MODULE_CONFIGURATION_CATALOG = {
+    "system": module_config_template(
+        features={
+            "user_management": True,
+            "department_management": True,
+            "role_management": True,
+            "operation_log": True,
+            # 注意:
+            # 1. 权限管理页在 ERP 侧仍然保持隐藏，不对租户暴露菜单入口。
+            # 2. 这里保留配置字段，仅用于兼容快照结构和运行时能力过滤。
+            # 3. studio/菜单层不要把它重新暴露成显式可见功能。
+            "permission_management": False,
+        },
+    ),
     "platform": module_config_template(
         features={
             "file_center": True,

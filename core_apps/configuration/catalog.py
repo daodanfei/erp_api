@@ -20,7 +20,10 @@ MODULE_CONFIGURATION_CATALOG = {
     "platform": module_config_template(
         features={
             "file_center": True,
-            # ERP 租户默认关闭字典/编码规则页面，仅保留配置字段兼容历史快照。
+            # 注意:
+            # 1. 字典中心 / 编码规则中心在 ERP 侧是刻意隐藏的，不对租户开放菜单入口。
+            # 2. 这里保留配置字段，仅用于兼容历史快照、运行时策略和导出合同结构。
+            # 3. 后续如果有人补蓝图编辑器或菜单配置，不要把这两个开关重新暴露为可见菜单。
             "dict_center": False,
             "code_rule_center": False,
         },

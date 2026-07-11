@@ -5,7 +5,7 @@ from core_apps.erp_auth.models import ERPDepartment, ERPUser
 from core_apps.tenant.models import Tenant
 
 class ProductCategory(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_categories', null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_categories', null=True, blank=True, verbose_name="租户")
     name = models.CharField(max_length=100, verbose_name="分类名称")
     parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='children', verbose_name="上级分类")
     sort = models.IntegerField(default=0, verbose_name="排序")
@@ -21,7 +21,7 @@ class ProductCategory(models.Model):
         return self.name
 
 class Unit(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='units', null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='units', null=True, blank=True, verbose_name="租户")
     name = models.CharField(max_length=50, verbose_name="单位名称")
     code = models.CharField(max_length=20, unique=True, verbose_name="单位编码")
     status = models.BooleanField(default=True, verbose_name="状态")
@@ -40,7 +40,7 @@ class Product(models.Model):
         ('DISABLED', '禁用'),
     )
 
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='products', null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='products', null=True, blank=True, verbose_name="租户")
     product_code = models.CharField(max_length=50, unique=True, verbose_name="商品编码")
     barcode = models.CharField(max_length=100, null=True, blank=True, verbose_name="条码")
     name = models.CharField(max_length=255, verbose_name="商品名称")
@@ -63,14 +63,14 @@ class Product(models.Model):
     current_stock = models.DecimalField(max_digits=15, decimal_places=3, default=0, verbose_name="当前库存")
     
     # Ownership & Audit
-    dept = models.ForeignKey(ERPDepartment, on_delete=models.SET_NULL, null=True, blank=True)
-    is_deleted = models.BooleanField(default=False)
-    deleted_at = models.DateTimeField(null=True, blank=True)
-    deleted_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='deleted_products')
+    dept = models.ForeignKey(ERPDepartment, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="所属部门")
+    is_deleted = models.BooleanField(default=False, verbose_name="是否删除")
+    deleted_at = models.DateTimeField(null=True, blank=True, verbose_name="删除时间")
+    deleted_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='deleted_products', verbose_name="删除人")
     
-    created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_products')
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_products', verbose_name="创建人")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
 
     class Meta:
         verbose_name = "商品"
@@ -85,24 +85,24 @@ class Product(models.Model):
         return f"[{self.product_code}] {self.name}"
 
 class ProductImage(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_images', null=True, blank=True)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_images', null=True, blank=True, verbose_name="租户")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images', verbose_name="商品")
     file_url = models.CharField(max_length=500, verbose_name="文件路径")
     sort = models.IntegerField(default=0, verbose_name="排序")
     is_cover = models.BooleanField(default=False, verbose_name="是否封面")
-    uploaded_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True)
-    uploaded_at = models.DateTimeField(auto_now_add=True)
+    uploaded_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, verbose_name="上传人")
+    uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="上传时间")
 
 class ProductAttachment(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_attachments', null=True, blank=True)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='attachments')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_attachments', null=True, blank=True, verbose_name="租户")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='attachments', verbose_name="商品")
     file_name = models.CharField(max_length=255, verbose_name="文件名")
     file_url = models.CharField(max_length=500, verbose_name="文件路径")
     file_size = models.BigIntegerField(verbose_name="文件大小")
-    uploaded_at = models.DateTimeField(auto_now_add=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True, verbose_name="上传时间")
 
 class ProductTag(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_tags', null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='product_tags', null=True, blank=True, verbose_name="租户")
     name = models.CharField(max_length=50, unique=True, verbose_name="标签名称")
     color = models.CharField(max_length=20, default='blue', verbose_name="颜色")
     sort = models.IntegerField(default=0, verbose_name="排序")
@@ -111,16 +111,16 @@ class ProductTag(models.Model):
 class Warehouse(models.Model):
     TYPE_CHOICES = (('MAIN', '主仓库'), ('BRANCH', '分仓'), ('TEMPORARY', '临时仓'))
     
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='warehouses', null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='warehouses', null=True, blank=True, verbose_name="租户")
     warehouse_code = models.CharField(max_length=50, unique=True, verbose_name="仓库编码")
     warehouse_name = models.CharField(max_length=100, verbose_name="仓库名称")
-    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='MAIN')
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='MAIN', verbose_name="仓库类型")
     manager = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="负责人")
-    phone = models.CharField(max_length=20, null=True, blank=True)
-    address = models.TextField(null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True, verbose_name="联系电话")
+    address = models.TextField(null=True, blank=True, verbose_name="地址")
     status = models.BooleanField(default=True, verbose_name="是否启用")
-    remark = models.TextField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    remark = models.TextField(null=True, blank=True, verbose_name="备注")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
 
     class Meta:
         verbose_name = "仓库"
@@ -130,13 +130,13 @@ class Warehouse(models.Model):
         return self.warehouse_name
 
 class Inventory(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventories', null=True, blank=True)
-    warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='inventories')
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='inventories')
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventories', null=True, blank=True, verbose_name="租户")
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='inventories', verbose_name="仓库")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='inventories', verbose_name="商品")
     current_qty = models.DecimalField(max_digits=15, decimal_places=3, default=0, verbose_name="当前库存")
     locked_qty = models.DecimalField(max_digits=15, decimal_places=3, default=0, verbose_name="锁定库存")
     # available_qty is property: current_qty - locked_qty
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
 
     class Meta:
         verbose_name = "库存主表"
@@ -185,12 +185,12 @@ class InventoryTransaction(models.Model):
         'RETURN_OUT': DIRECTION_OUT,
     }
     
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventory_transactions', null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='inventory_transactions', null=True, blank=True, verbose_name="租户")
     transaction_no = models.CharField(max_length=50, unique=True, verbose_name="流水号")
     business_date = models.DateField(default=timezone.localdate, verbose_name="业务日期")
-    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT)
-    product = models.ForeignKey(Product, on_delete=models.PROTECT)
-    transaction_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, verbose_name="仓库")
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, verbose_name="商品")
+    transaction_type = models.CharField(max_length=20, choices=TYPE_CHOICES, verbose_name="业务类型")
     direction = models.CharField(max_length=3, choices=DIRECTION_CHOICES, verbose_name="方向")
     quantity = models.DecimalField(max_digits=15, decimal_places=3, verbose_name="变动数量") # Positive for IN, Negative for OUT
     before_qty = models.DecimalField(max_digits=15, decimal_places=3, verbose_name="变动前库存")
@@ -201,9 +201,9 @@ class InventoryTransaction(models.Model):
     reference_type = models.CharField(max_length=50, null=True, blank=True, verbose_name="关联单据类型")
     reference_id = models.IntegerField(null=True, blank=True, verbose_name="关联单据ID")
     
-    remark = models.TextField(null=True, blank=True)
-    operator = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    remark = models.TextField(null=True, blank=True, verbose_name="备注")
+    operator = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="操作人")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
 
     class Meta:
         verbose_name = "库存流水"
@@ -235,28 +235,28 @@ class Stocktake(models.Model):
         ('COMPLETED', '已完成'),
         ('CANCELLED', '已取消'),
     )
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='stocktakes', null=True, blank=True)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='stocktakes', null=True, blank=True, verbose_name="租户")
     stocktake_no = models.CharField(max_length=50, unique=True, verbose_name="盘点单号")
-    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, verbose_name="仓库")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT', verbose_name="状态")
     
-    created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_stocktakes')
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-    is_deleted = models.BooleanField(default=False)
+    created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_stocktakes', verbose_name="创建人")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    completed_at = models.DateTimeField(null=True, blank=True, verbose_name="完成时间")
+    is_deleted = models.BooleanField(default=False, verbose_name="是否删除")
 
     class Meta:
         verbose_name = "库存盘点"
         verbose_name_plural = verbose_name
 
 class StocktakeItem(models.Model):
-    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='stocktake_items', null=True, blank=True)
-    stocktake = models.ForeignKey(Stocktake, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey(Product, on_delete=models.PROTECT)
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='stocktake_items', null=True, blank=True, verbose_name="租户")
+    stocktake = models.ForeignKey(Stocktake, on_delete=models.CASCADE, related_name='items', verbose_name="盘点单")
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, verbose_name="商品")
     system_qty = models.DecimalField(max_digits=15, decimal_places=3, verbose_name="系统数量")
     actual_qty = models.DecimalField(max_digits=15, decimal_places=3, verbose_name="实盘数量")
     # difference_qty is actual - system
-    remark = models.TextField(null=True, blank=True)
+    remark = models.TextField(null=True, blank=True, verbose_name="备注")
 
     @property
     def difference_qty(self):

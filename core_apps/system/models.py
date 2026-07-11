@@ -3,6 +3,22 @@ from django.db import models
 
 
 class OperationLog(models.Model):
+    tenant = models.ForeignKey(
+        "tenant.Tenant",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="operation_logs",
+        verbose_name="租户",
+    )
+    erp_user = models.ForeignKey(
+        "erp_auth.ERPUser",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="operation_logs",
+        verbose_name="ERP用户",
+    )
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, verbose_name="用户")
     path = models.CharField(max_length=200, verbose_name="请求路径")
     method = models.CharField(max_length=10, verbose_name="请求方法")

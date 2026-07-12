@@ -19,6 +19,7 @@ from business_apps.inventory.policies import InventoryPolicy
 from business_apps.platform.services import CodeRuleService
 from business_apps.sales.models import SalesOrder
 from business_apps.sales.policies import SalesPolicy
+from core_apps.common.viewsets import apply_erp_tenant_scope
 from core_apps.erp_auth.compat import (
     build_erp_user_fk_kwargs,
     get_erp_user_id,
@@ -662,18 +663,19 @@ class SalesOrderService:
         return order
 
     @staticmethod
-    def get_statistics():
+    def get_statistics(user=None):
         today = timezone.now().date()
         month_start = today.replace(day=1)
+        sales_orders = apply_erp_tenant_scope(SalesOrder.objects.all(), user=user)
         
         stats = {
-            'today': SalesOrder.objects.filter(order_date=today).aggregate(
+            'today': sales_orders.filter(order_date=today).aggregate(
                 count=Count('id'), amount=Sum('total_amount')
             ),
-            'month': SalesOrder.objects.filter(order_date__gte=month_start).aggregate(
+            'month': sales_orders.filter(order_date__gte=month_start).aggregate(
                 count=Count('id'), amount=Sum('total_amount')
             ),
-            'by_customer': SalesOrder.objects.values('customer__customer_name').annotate(
+            'by_customer': sales_orders.values('customer__customer_name').annotate(
                 count=Count('id'), amount=Sum('total_amount')
             ).order_by('-amount')[:10]
         }

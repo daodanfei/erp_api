@@ -6,8 +6,8 @@ from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.erp_auth.compat import as_erp_user
 from django.db.models import Q
 from django.core.exceptions import ObjectDoesNotExist
-from .models import Receivable, Receipt, WriteOff
-from .serializers import ReceivableSerializer, ReceiptSerializer, WriteOffSerializer
+from .models import CustomerRefund, Receivable, Receipt, WriteOff
+from .serializers import CustomerRefundSerializer, ReceivableSerializer, ReceiptSerializer, WriteOffSerializer
 from .services import ARService
 from business_apps.crm.models import Customer
 from business_apps.sales.models import SalesOrder
@@ -186,3 +186,62 @@ class WriteOffViewSet(ModuleAwareReadOnlyViewSet):
         if not policy.writeoff_enabled():
             return WriteOff.objects.none()
         return super().get_queryset()
+
+
+class CustomerRefundViewSet(BaseBusinessViewSet):
+    module_key = "ar_receivable"
+    queryset = CustomerRefund.objects.filter(is_deleted=False)
+    serializer_class = CustomerRefundSerializer
+    filterset_fields = ['customer', 'status', 'payment_method']
+
+    permission_map = {
+        'list': 'ar:refund:view',
+        'retrieve': 'ar:refund:view',
+        'create': 'ar:refund:create',
+        'update': 'ar:refund:update',
+        'destroy': 'ar:refund:delete',
+        'approve': 'ar:refund:approve',
+        'execute': 'ar:refund:execute',
+    }
+
+    def create(self, request, *args, **kwargs):
+        try:
+            customer = self.get_scoped_related_object(Customer.objects.filter(is_deleted=False), id=request.data.get('customer'))
+            receivable = self.get_scoped_related_object(Receivable.objects.all(), id=request.data.get('receivable'))
+            refund = ARService.create_customer_refund(
+                customer=customer,
+                receivable=receivable,
+                refund_date=request.data.get('refund_date'),
+                payment_method=request.data.get('payment_method', 'BANK_TRANSFER'),
+                cash_account=(
+                    self.get_scoped_related_object(CashAccount.objects.all(), id=request.data.get('cash_account'))
+                    if request.data.get('cash_account') else None
+                ),
+                operator=request.user,
+                reference_no=request.data.get('reference_no'),
+                remark=request.data.get('remark'),
+            )
+            serializer = self.get_serializer(refund)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        refund = self.get_object()
+        try:
+            ARService.approve_customer_refund(refund, request.user)
+            return Response({'status': 'approved'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def execute(self, request, pk=None):
+        refund = self.get_object()
+        try:
+            ARService.execute_customer_refund(refund, request.user)
+            return Response({'status': 'executed'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)

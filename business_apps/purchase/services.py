@@ -13,6 +13,7 @@ from business_apps.inventory.policies import InventoryPolicy
 from business_apps.purchase.models import PurchaseOrder
 from business_apps.purchase.policies import PurchasePolicy
 from business_apps.platform.services import CodeRuleService
+from core_apps.common.viewsets import apply_erp_tenant_scope
 from core_apps.erp_auth.compat import (
     build_erp_user_and_dept_kwargs,
     build_erp_user_fk_kwargs,
@@ -573,7 +574,7 @@ class PurchaseOrderService:
         return order
 
     @staticmethod
-    def get_statistics(start_date=None, end_date=None):
+    def get_statistics(user=None, start_date=None, end_date=None):
         """采购统计，支持日期范围过滤"""
         base_q = Q()
         if start_date:
@@ -581,17 +582,20 @@ class PurchaseOrderService:
         if end_date:
             base_q &= Q(order_date__lte=end_date)
 
+        orders = apply_erp_tenant_scope(PurchaseOrder.objects.all(), user=user).filter(base_q).exclude(status='CANCELLED')
+        order_items = apply_erp_tenant_scope(PurchaseOrderItem.objects.all(), user=user).filter(
+            base_q & ~Q(purchase_order__status='CANCELLED')
+        )
+
         by_supplier = list(
-            PurchaseOrder.objects.filter(base_q).exclude(status='CANCELLED').values('supplier_name_snapshot').annotate(
+            orders.values('supplier_name_snapshot').annotate(
                 count=Count('id'),
                 amount=Sum('total_amount')
             ).order_by('-amount')[:10]
         )
 
         by_product = list(
-            PurchaseOrderItem.objects.filter(
-                base_q & ~Q(purchase_order__status='CANCELLED')
-            ).values(
+            order_items.values(
                 'product_name_snapshot', 'product_code_snapshot'
             ).annotate(
                 qty=Sum('quantity'),
@@ -600,14 +604,14 @@ class PurchaseOrderService:
         )
 
         # 汇总统计
-        total_orders = PurchaseOrder.objects.filter(base_q).exclude(status='CANCELLED').count()
-        total_amount = PurchaseOrder.objects.filter(base_q).exclude(status='CANCELLED').aggregate(
+        total_orders = orders.count()
+        total_amount = orders.aggregate(
             total=Sum('total_amount')
         )['total'] or Decimal('0')
 
         # 按状态统计
         by_status = dict(
-            PurchaseOrder.objects.filter(base_q).values('status').annotate(
+            orders.values('status').annotate(
                 count=Count('id')
             ).values_list('status', 'count')
         )
@@ -615,7 +619,7 @@ class PurchaseOrderService:
         # 按月统计
         from django.db.models.functions import TruncMonth
         by_month = list(
-            PurchaseOrder.objects.filter(base_q).exclude(status='CANCELLED')
+            orders
             .annotate(month=TruncMonth('order_date'))
             .values('month')
             .annotate(count=Count('id'), amount=Sum('total_amount'))

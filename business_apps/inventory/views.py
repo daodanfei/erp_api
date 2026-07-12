@@ -6,6 +6,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.db import transaction
 from django.utils import timezone
+from django.db.models import Q
 from core_apps.common.viewsets import (
     BaseBusinessViewSet,
     ModuleAwareModelViewSet,
@@ -14,6 +15,8 @@ from core_apps.common.viewsets import (
     validate_erp_related_tenant_scope,
 )
 from core_apps.erp_auth.compat import build_erp_user_and_dept_kwargs, build_erp_user_fk_kwargs
+from core_apps.erp_auth.compat import as_erp_user
+from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.tenant.services import TenantService
 from .models import Product, ProductCategory, Unit, ProductImage, ProductAttachment, ProductTag, Warehouse, Inventory, InventoryTransaction, Stocktake, StocktakeItem
 from .serializers import (
@@ -21,12 +24,14 @@ from .serializers import (
     UnitSerializer, ProductImageSerializer, ProductAttachmentSerializer, ProductTagSerializer,
     WarehouseSerializer, InventorySerializer, InventoryTransactionSerializer, StocktakeSerializer, StocktakeItemSerializer
 )
-from .services import generate_product_code, generate_unit_code, generate_warehouse_code, check_duplicate_product, check_can_delete_product, InventoryService
+from .services import generate_product_code, generate_stocktake_no, generate_unit_code, generate_warehouse_code, check_duplicate_product, check_can_delete_product, InventoryService
 from core_apps.policies.registry import get_policy
 import csv
 from django.http import HttpResponse
 
 MODULE_KEY = "inventory"
+STOCKTAKE_APPROVE_PERMISSION_CODE = "inventory:stocktake:approve"
+STOCKTAKE_COMPLETE_PERMISSION_CODE = "inventory:stocktake:complete"
 
 
 class ProductCategoryViewSet(ModuleAwareModelViewSet):
@@ -320,12 +325,16 @@ class StocktakeViewSet(ModuleAwareModelViewSet):
         "created_by",
     ).prefetch_related("items__product")
     serializer_class = StocktakeSerializer
+    dept_field = "created_by__dept"
+    user_field = "created_by"
     permission_map = {
         'list': 'inventory:stocktake:view',
         'retrieve': 'inventory:stocktake:view',
         'create': 'inventory:stocktake:create',
         'update': 'inventory:stocktake:update',
         'destroy': 'inventory:stocktake:delete',
+        'submit': 'inventory:stocktake:update',
+        'approve': 'inventory:stocktake:approve',
         'complete': 'inventory:stocktake:complete',
         'add_items': 'inventory:stocktake:update',
         'update_items': 'inventory:stocktake:update',
@@ -338,12 +347,42 @@ class StocktakeViewSet(ModuleAwareModelViewSet):
                 raise ValidationError({"detail": "当前配置未启用库存盘点"})
         return super().initial(request, *args, **kwargs)
 
+    def get_queryset(self):
+        queryset = self.get_tenant_scoped_queryset()
+        user = self.request.user
+        scope_q = get_data_scope_filter(user, dept_field=self.dept_field, user_field=self.user_field)
+        if not scope_q.children:
+            return queryset.distinct()
+
+        visible_q = scope_q
+        erp_user = as_erp_user(user)
+        if getattr(self, "action", None) in ["list", "retrieve", "approve"] and user.roles.filter(
+            permissions__code=STOCKTAKE_APPROVE_PERMISSION_CODE,
+            permissions__status=True,
+            status=True,
+        ).exists():
+            pending_q = Q(status="PENDING_APPROVAL")
+            if erp_user is not None:
+                pending_q &= ~Q(created_by=erp_user) & ~Q(submitted_by=erp_user)
+            visible_q |= pending_q
+
+        if getattr(self, "action", None) in ["list", "retrieve", "complete"] and user.roles.filter(
+            permissions__code=STOCKTAKE_COMPLETE_PERMISSION_CODE,
+            permissions__status=True,
+            status=True,
+        ).exists():
+            visible_q |= Q(status="APPROVED")
+
+        return queryset.filter(visible_q).distinct()
+
     def perform_create(self, serializer):
         policy = get_policy("inventory", user=self.request.user)
         warehouse = policy.resolve_warehouse(serializer.validated_data.get("warehouse"))
         stocktake = serializer.save(
             tenant=warehouse.tenant,
             warehouse=warehouse,
+            stocktake_no=generate_stocktake_no(),
+            status="DRAFT",
             **build_erp_user_fk_kwargs(Stocktake, user=self.request.user, field_names=("created_by",)),
         )
         InventoryService.ensure_stocktake_items(stocktake)
@@ -362,6 +401,24 @@ class StocktakeViewSet(ModuleAwareModelViewSet):
             InventoryService.ensure_stocktake_items(stocktake)
             summary = InventoryService.complete_stocktake(stocktake, request.user)
             return Response({"status": "success", "summary": summary})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        stocktake = self.get_object()
+        try:
+            InventoryService.submit_stocktake(stocktake, request.user)
+            return Response({"status": "pending_approval"})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        stocktake = self.get_object()
+        try:
+            InventoryService.approve_stocktake(stocktake, request.user)
+            return Response({"status": "approved"})
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

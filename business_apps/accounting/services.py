@@ -303,6 +303,48 @@ class VoucherService:
         ]
 
     @staticmethod
+    def build_customer_refund_lines(refund):
+        summary = f"客户退款 {refund.refund_no}"
+        cash_subject_code = VoucherService._resolve_cash_subject_code(refund.cash_account)
+        return [
+            {
+                "subject_code": "1122",
+                "summary": summary,
+                "debit_amount": refund.refund_amount,
+                "business_type": "AR_REFUND",
+                "business_id": refund.id,
+            },
+            {
+                "subject_code": cash_subject_code,
+                "summary": summary,
+                "credit_amount": refund.refund_amount,
+                "business_type": "AR_REFUND",
+                "business_id": refund.id,
+            },
+        ]
+
+    @staticmethod
+    def build_supplier_refund_lines(refund):
+        summary = f"供应商退款 {refund.refund_no}"
+        cash_subject_code = VoucherService._resolve_cash_subject_code(refund.cash_account)
+        return [
+            {
+                "subject_code": cash_subject_code,
+                "summary": summary,
+                "debit_amount": refund.refund_amount,
+                "business_type": "AP_SUPPLIER_REFUND",
+                "business_id": refund.id,
+            },
+            {
+                "subject_code": "2202",
+                "summary": summary,
+                "credit_amount": refund.refund_amount,
+                "business_type": "AP_SUPPLIER_REFUND",
+                "business_id": refund.id,
+            },
+        ]
+
+    @staticmethod
     def build_sales_return_lines(return_order, amount):
         summary = f"销售退货 {return_order.return_no}"
         return [
@@ -350,6 +392,8 @@ class PostingService:
     EVENT_PAYMENT_EXECUTED = "PAYMENT_EXECUTED"
     EVENT_SALES_RETURN = "SALES_RETURN_COMPLETED"
     EVENT_PURCHASE_RETURN = "PURCHASE_RETURN_COMPLETED"
+    EVENT_CUSTOMER_REFUND = "CUSTOMER_REFUND_EXECUTED"
+    EVENT_SUPPLIER_REFUND = "SUPPLIER_REFUND_EXECUTED"
 
     @staticmethod
     def _sum_outbound_amount(order):
@@ -368,28 +412,35 @@ class PostingService:
 
     @staticmethod
     def _sum_sales_return_amount(return_order):
+        from business_apps.supply_chain.services import SalesReturnService
+
         total = Decimal("0")
-        sales_items_by_product = {
-            item.product_id: item
-            for item in return_order.sales_order.items.all()
-        }
+        allocations_by_item = SalesReturnService.build_sales_order_item_allocations(
+            return_order,
+            exclude_return_order_id=return_order.id,
+        )
         for item in return_order.items.all():
-            sales_item = sales_items_by_product.get(item.product_id)
-            unit_price = sales_item.unit_price if sales_item else (item.product.sale_price or Decimal("0"))
-            total += Decimal(str(item.quantity)) * Decimal(str(unit_price))
+            allocations = allocations_by_item.get(item.id, [])
+            if allocations:
+                for sales_item, allocated_quantity in allocations:
+                    total += Decimal(str(allocated_quantity)) * Decimal(str(sales_item.unit_price))
+            else:
+                total += Decimal(str(item.quantity)) * Decimal(str(item.product.sale_price or Decimal("0")))
         return VoucherService._normalize_amount(total)
 
     @staticmethod
     def _sum_purchase_return_amount(return_order):
+        from business_apps.supply_chain.services import PurchaseReturnService
+
         total = Decimal("0")
-        purchase_items_by_product = {
-            item.product_id: item
-            for item in return_order.purchase_order.items.all()
-        }
+        allocations_by_item = PurchaseReturnService.build_purchase_order_item_allocations(return_order)
         for item in return_order.items.all():
-            purchase_item = purchase_items_by_product.get(item.product_id)
-            unit_price = purchase_item.unit_price if purchase_item else (item.product.cost_price or Decimal("0"))
-            total += Decimal(str(item.quantity)) * Decimal(str(unit_price))
+            allocations = allocations_by_item.get(item.id, [])
+            if allocations:
+                for purchase_item, allocated_quantity in allocations:
+                    total += Decimal(str(allocated_quantity)) * Decimal(str(purchase_item.unit_price))
+            else:
+                total += Decimal(str(item.quantity)) * Decimal(str(item.product.cost_price or Decimal("0")))
         return VoucherService._normalize_amount(total)
 
     @staticmethod
@@ -589,6 +640,80 @@ class PostingService:
                 line_specs=VoucherService.build_payment_lines(payment),
                 operator=operator,
                 tenant=payment.tenant,
+            ),
+        )[0]
+
+    @staticmethod
+    @transaction.atomic
+    def post_customer_refund_execution(refund, operator=None):
+        policy = get_policy("accounting", user=operator)
+        if not policy.voucher_auto_posting_enabled() or not policy.ar_ap_posting_enabled():
+            return None
+        amount = VoucherService._normalize_amount(refund.refund_amount)
+        if amount <= 0:
+            raise ValueError("客户退款过账金额必须大于0")
+        voucher_date = refund.refund_date
+        payload = {
+            "amount": str(amount),
+            "voucher_date": voucher_date.isoformat(),
+            "source_type": "AR_REFUND",
+            "source_id": refund.id,
+        }
+        return PostingService._post_once(
+            tenant=refund.tenant,
+            event_type=PostingService.EVENT_CUSTOMER_REFUND,
+            business_type="AR_REFUND",
+            business_id=refund.id,
+            business_document_no=refund.refund_no,
+            payload=payload,
+            operator=operator,
+            voucher_factory=lambda: VoucherService.create_voucher(
+                voucher_date=voucher_date,
+                voucher_type="AR_REFUND",
+                abstract=f"客户退款 {refund.refund_no}",
+                source_type="AR_REFUND",
+                source_id=refund.id,
+                source_document_no=refund.refund_no,
+                line_specs=VoucherService.build_customer_refund_lines(refund),
+                operator=operator,
+                tenant=refund.tenant,
+            ),
+        )[0]
+
+    @staticmethod
+    @transaction.atomic
+    def post_supplier_refund_execution(refund, operator=None):
+        policy = get_policy("accounting", user=operator)
+        if not policy.voucher_auto_posting_enabled() or not policy.ar_ap_posting_enabled():
+            return None
+        amount = VoucherService._normalize_amount(refund.refund_amount)
+        if amount <= 0:
+            raise ValueError("供应商退款过账金额必须大于0")
+        voucher_date = refund.refund_date
+        payload = {
+            "amount": str(amount),
+            "voucher_date": voucher_date.isoformat(),
+            "source_type": "AP_SUPPLIER_REFUND",
+            "source_id": refund.id,
+        }
+        return PostingService._post_once(
+            tenant=refund.tenant,
+            event_type=PostingService.EVENT_SUPPLIER_REFUND,
+            business_type="AP_SUPPLIER_REFUND",
+            business_id=refund.id,
+            business_document_no=refund.refund_no,
+            payload=payload,
+            operator=operator,
+            voucher_factory=lambda: VoucherService.create_voucher(
+                voucher_date=voucher_date,
+                voucher_type="AP_SUPPLIER_REFUND",
+                abstract=f"供应商退款 {refund.refund_no}",
+                source_type="AP_SUPPLIER_REFUND",
+                source_id=refund.id,
+                source_document_no=refund.refund_no,
+                line_specs=VoucherService.build_supplier_refund_lines(refund),
+                operator=operator,
+                tenant=refund.tenant,
             ),
         )[0]
 

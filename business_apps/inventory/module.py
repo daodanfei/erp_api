@@ -134,6 +134,7 @@ MODULE = ModuleDefinition(
         {"code": "inventory:stocktake:view", "name": "查看盘点单", "parent": "inventory:stocktake"},
         {"code": "inventory:stocktake:create", "name": "创建盘点单", "parent": "inventory:stocktake"},
         {"code": "inventory:stocktake:update", "name": "编辑盘点单", "parent": "inventory:stocktake"},
+        {"code": "inventory:stocktake:approve", "name": "审核盘点单", "parent": "inventory:stocktake"},
         {"code": "inventory:stocktake:complete", "name": "完成盘点", "parent": "inventory:stocktake"},
         {"code": "inventory:stocktake:delete", "name": "删除盘点单", "parent": "inventory:stocktake"},
     ),

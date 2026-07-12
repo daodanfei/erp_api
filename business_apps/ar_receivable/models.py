@@ -10,6 +10,9 @@ class Receivable(models.Model):
         ('UNPAID', '未收款'),
         ('PARTIAL_PAID', '部分收款'),
         ('PAID', '已结清'),
+        ('REFUND_PENDING', '待退款'),
+        ('PARTIAL_REFUNDED', '部分退款'),
+        ('REFUNDED', '已退款'),
         ('CANCELLED', '已取消'),
     )
 
@@ -51,12 +54,14 @@ class Receivable(models.Model):
 
     @property
     def balance(self):
-        return self.amount - self.written_off_amount
+        if self.amount >= 0:
+            return self.amount - self.written_off_amount
+        return abs(self.amount) - self.written_off_amount
         
     @property
     def is_overdue(self):
         from django.utils import timezone
-        return self.status != 'PAID' and self.due_date < timezone.now().date()
+        return self.amount > 0 and self.status not in ('PAID', 'CANCELLED') and self.due_date < timezone.now().date()
         
     @property
     def overdue_days(self):
@@ -64,6 +69,47 @@ class Receivable(models.Model):
         if self.is_overdue:
             return (timezone.now().date() - self.due_date).days
         return 0
+
+
+class CustomerRefund(models.Model):
+    STATUS_CHOICES = (
+        ('DRAFT', '草稿'),
+        ('APPROVED', '已审核'),
+        ('COMPLETED', '已退款'),
+        ('CANCELLED', '已作废'),
+    )
+    PAYMENT_METHODS = (
+        ('BANK_TRANSFER', '银行转账'),
+        ('WECHAT', '微信支付'),
+        ('ALIPAY', '支付宝'),
+        ('CASH', '现金'),
+        ('OTHER', '其他'),
+    )
+
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='customer_refunds', null=True, blank=True)
+    refund_no = models.CharField(max_length=50, unique=True, verbose_name="退款单号")
+    customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name='refunds')
+    receivable = models.ForeignKey(Receivable, on_delete=models.PROTECT, related_name='refunds', verbose_name="对应红字应收")
+    refund_amount = models.DecimalField(max_digits=15, decimal_places=2, verbose_name="退款金额")
+    refund_date = models.DateField(verbose_name="退款日期")
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHODS, default='BANK_TRANSFER')
+    cash_account = models.ForeignKey('finance.CashAccount', on_delete=models.PROTECT, null=True, blank=True, verbose_name="退款账户")
+    reference_no = models.CharField(max_length=100, null=True, blank=True, verbose_name="交易流水号/支票号")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    remark = models.TextField(null=True, blank=True)
+    dept = models.ForeignKey(ERPDepartment, on_delete=models.SET_NULL, null=True, blank=True)
+    created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_customer_refunds')
+    approved_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_customer_refunds')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    executed_at = models.DateTimeField(null=True, blank=True, verbose_name="执行时间")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_deleted = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = "客户退款单"
+        verbose_name_plural = verbose_name
+        ordering = ['-refund_date', '-created_at']
 
 class Receipt(models.Model):
     STATUS_CHOICES = (
@@ -119,7 +165,7 @@ class WriteOff(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='write_offs', null=True, blank=True)
     write_off_no = models.CharField(max_length=50, unique=True, verbose_name="核销单号")
     receivable = models.ForeignKey(Receivable, on_delete=models.PROTECT, related_name='write_offs')
-    receipt = models.ForeignKey(Receipt, on_delete=models.PROTECT, related_name='write_offs')
+    receipt = models.ForeignKey(Receipt, on_delete=models.PROTECT, related_name='write_offs', null=True, blank=True)
     amount = models.DecimalField(max_digits=15, decimal_places=2, verbose_name="核销金额")
     write_off_type = models.CharField(max_length=30, choices=WRITE_OFF_TYPE_CHOICES, default='RECEIPT', verbose_name="核销类型")
     

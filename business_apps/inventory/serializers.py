@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from core_apps.common.authz import has_erp_role_permission
+from core_apps.erp_auth.compat import get_erp_user_id
 from core_apps.policies.registry import get_policy
 
 from .features import FIELD_INVENTORY_TRANSACTION_WAREHOUSE, FIELD_STOCKTAKE_WAREHOUSE
@@ -180,16 +182,47 @@ class StocktakeItemSerializer(serializers.ModelSerializer):
 class StocktakeSerializer(WarehouseFieldRuleSerializerMixin, ActiveWarehouseValidationMixin, serializers.ModelSerializer):
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)
     creator_name = serializers.CharField(source='created_by.username', read_only=True)
+    submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True)
     items = StocktakeItemSerializer(many=True, read_only=True)
     warehouse_field_rule = serializers.SerializerMethodField()
+    can_approve = serializers.SerializerMethodField()
     warehouse_field_rule_key = FIELD_STOCKTAKE_WAREHOUSE
     
     class Meta:
         model = Stocktake
         fields = '__all__'
+        read_only_fields = (
+            'stocktake_no',
+            'status',
+            'created_by',
+            'submitted_by',
+            'submitted_at',
+            'approved_by',
+            'approved_at',
+            'created_at',
+            'completed_at',
+            'is_deleted',
+            'tenant',
+        )
         extra_kwargs = {
             'warehouse': {'required': False, 'allow_null': True},
         }
 
     def get_warehouse_field_rule(self, obj):
         return self._get_warehouse_field_rule()
+
+    def get_can_approve(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        if obj.status != "PENDING_APPROVAL":
+            return False
+        erp_user_id = get_erp_user_id(user)
+        if erp_user_id is not None and (
+            obj.created_by_id == erp_user_id or obj.submitted_by_id == erp_user_id
+        ):
+            return False
+        return has_erp_role_permission(user, STOCKTAKE_APPROVE_PERMISSION_CODE)
+STOCKTAKE_APPROVE_PERMISSION_CODE = "inventory:stocktake:approve"

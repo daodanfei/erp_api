@@ -189,5 +189,5 @@ class SalesOrderViewSet(BaseBusinessViewSet):
 
     @action(detail=False, methods=['get'])
     def statistics(self, request):
-        stats = SalesOrderService.get_statistics()
+        stats = SalesOrderService.get_statistics(request.user)
         return Response(stats)

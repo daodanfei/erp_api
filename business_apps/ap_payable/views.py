@@ -1,13 +1,14 @@
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django_filters import rest_framework as filters
 from core_apps.common.viewsets import BaseBusinessViewSet, ModuleAwareModelViewSet
 from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.erp_auth.compat import as_erp_user
 from django.db.models import Q
 from django.core.exceptions import ObjectDoesNotExist
-from .models import APAccount, APPayment, APAllocation
-from .serializers import APAccountSerializer, APPaymentSerializer, APAllocationSerializer
+from .models import APAccount, APAllocation, APPayment, SupplierCreditNote, SupplierRefund
+from .serializers import APAccountSerializer, APAllocationSerializer, APPaymentSerializer, SupplierRefundSerializer
 from .services import APService
 from business_apps.supplier.models import Supplier
 from business_apps.finance.models import CashAccount
@@ -17,11 +18,24 @@ from core_apps.policies.registry import get_policy
 PAYMENT_APPROVE_PERMISSION_CODE = 'ap:payment:approve'
 PAYMENT_EXECUTE_PERMISSION_CODE = 'ap:payment:execute'
 
+
+class CharInFilter(filters.BaseInFilter, filters.CharFilter):
+    pass
+
+
+class APAccountFilterSet(filters.FilterSet):
+    status = CharInFilter(field_name='status', lookup_expr='in')
+
+    class Meta:
+        model = APAccount
+        fields = ['supplier', 'status', 'due_date']
+
+
 class APAccountViewSet(BaseBusinessViewSet):
     module_key = "ap_payable"
     queryset = APAccount.objects.filter(is_deleted=False)
     serializer_class = APAccountSerializer
-    filterset_fields = ['supplier', 'status', 'due_date']
+    filterset_class = APAccountFilterSet
     
     permission_map = {
         'list': 'ap:account:view',
@@ -174,5 +188,64 @@ class APAllocationViewSet(ModuleAwareModelViewSet):
             return Response({"status": "success"})
         except ObjectDoesNotExist:
             return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SupplierRefundViewSet(BaseBusinessViewSet):
+    module_key = "ap_payable"
+    queryset = SupplierRefund.objects.filter(is_deleted=False)
+    serializer_class = SupplierRefundSerializer
+    filterset_fields = ['supplier', 'status', 'payment_method']
+
+    permission_map = {
+        'list': 'ap:refund:view',
+        'retrieve': 'ap:refund:view',
+        'create': 'ap:refund:create',
+        'update': 'ap:refund:update',
+        'destroy': 'ap:refund:delete',
+        'approve': 'ap:refund:approve',
+        'execute': 'ap:refund:execute',
+    }
+
+    def create(self, request, *args, **kwargs):
+        try:
+            supplier = self.get_scoped_related_object(Supplier.objects.all(), id=request.data.get('supplier'))
+            credit_note = self.get_scoped_related_object(SupplierCreditNote.objects.all(), id=request.data.get('credit_note'))
+            refund = APService.create_supplier_refund(
+                supplier=supplier,
+                credit_note=credit_note,
+                refund_date=request.data.get('refund_date'),
+                payment_method=request.data.get('payment_method', 'BANK_TRANSFER'),
+                cash_account=(
+                    self.get_scoped_related_object(CashAccount.objects.all(), id=request.data.get('cash_account'))
+                    if request.data.get('cash_account') else None
+                ),
+                operator=request.user,
+                reference_no=request.data.get('reference_no'),
+                remark=request.data.get('remark'),
+            )
+            serializer = self.get_serializer(refund)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        refund = self.get_object()
+        try:
+            APService.approve_supplier_refund(refund, request.user)
+            return Response({'status': 'approved'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def execute(self, request, pk=None):
+        refund = self.get_object()
+        try:
+            APService.execute_supplier_refund(refund, request.user)
+            return Response({'status': 'executed'})
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)

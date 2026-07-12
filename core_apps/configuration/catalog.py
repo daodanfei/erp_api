@@ -47,6 +47,7 @@ MODULE_CONFIGURATION_CATALOG = {
             "batch_tracking": False,
             "serial_number": False,
             "stocktake": True,
+            "stocktake_approval": False,
             "negative_stock_allowed": False,
             "warehouse_required_on_transaction": False,
         },

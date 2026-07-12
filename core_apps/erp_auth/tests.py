@@ -11,10 +11,12 @@ from business_apps.ap_payable.services import APService
 from business_apps.ar_receivable.models import Receivable, Receipt, WriteOff
 from business_apps.ar_receivable.services import ARService
 from business_apps.accounting.models import BusinessPostingLog, Voucher
+from business_apps.accounting.models import AccountSubject
 from business_apps.accounting.services import SubjectInitService
 from business_apps.crm.models import Customer, CustomerAttachment, FollowRecord
 from business_apps.finance.models import CashAccount
 from business_apps.inventory.models import InventoryTransaction, Product, ProductCategory, Unit, Warehouse
+from business_apps.platform.models import DictItem, DictType, File
 from business_apps.inventory.services import InventoryService
 from business_apps.purchase.services import PurchaseOrderService
 from business_apps.sales.models import OrderApprovalLog, SalesExecutionLog, SalesOrder
@@ -107,6 +109,56 @@ def build_purchase_single_warehouse_config():
         },
     }
     return config
+
+
+def build_finance_cash_config():
+    return {
+        "basic": {
+            "name": "erp_finance_cash_config",
+            "industry": "trade",
+            "mode": "saas",
+        },
+        "enabled_modules": ["system", "platform", "finance"],
+        "module_configs": {
+            "system": build_system_module_config(),
+            "platform": {"features": {}, "workflows": {}, "field_rules": {}, "defaults": {}},
+            "finance": {
+                "features": {
+                    "multi_cash_account": True,
+                    "reconciliation_enabled": True,
+                    "cash_flow_analysis_enabled": True,
+                    "opening_balance_editable": True,
+                },
+                "workflows": {},
+                "field_rules": {},
+                "defaults": {},
+            },
+        },
+    }
+
+
+def build_platform_file_config(*, dict_center=False):
+    return {
+        "basic": {
+            "name": "erp_platform_file_config",
+            "industry": "trade",
+            "mode": "saas",
+        },
+        "enabled_modules": ["system", "platform"],
+        "module_configs": {
+            "system": build_system_module_config(),
+            "platform": {
+                "features": {
+                    "file_center": True,
+                    "dict_center": dict_center,
+                    "code_rule_center": False,
+                },
+                "workflows": {},
+                "field_rules": {},
+                "defaults": {},
+            },
+        },
+    }
 
 
 def build_purchase_ap_config():
@@ -781,6 +833,7 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertEqual(role_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(log_response.status_code, status.HTTP_403_FORBIDDEN)
 
+
     def test_create_user_respects_tenant_limit(self):
         self.login()
 
@@ -1293,6 +1346,437 @@ class ERPUserSalesOutboundFlowTest(TestCase):
                 user=self.erp_user,
             )
 
+class ERPFinanceCashAccountApiTest(APITestCase):
+    def setUp(self):
+        self.platform_user = User.objects.create_user(username="erp_finance_owner", password="password")
+        self.blueprint = SystemBlueprint.objects.create(
+            key="erp_finance_bp",
+            name="ERP Finance BP",
+            created_by=self.platform_user,
+        )
+        self.version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v1",
+            config_json=build_finance_cash_config(),
+            created_by=self.platform_user,
+            is_published=True,
+        )
+        self.instance = SystemInstance.objects.create(
+            blueprint=self.blueprint,
+            blueprint_version=self.version,
+            name="ERP Finance SaaS",
+            mode="SAAS",
+            runtime_mode="SAAS",
+            status="ACTIVE",
+            created_by=self.platform_user,
+        )
+        self.tenant = Tenant.objects.create(
+            code="erp-finance-tenant",
+            name="ERP Finance Tenant",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        self.erp_user = bind_result.initial_admin.user
+        self.initial_password = bind_result.initial_admin.initial_password
+
+    def login(self):
+        response = self.client.post(
+            "/api/erp-auth/login/",
+            {
+                "tenant_code": self.tenant.code,
+                "username": self.erp_user.username,
+                "password": self.initial_password,
+            },
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+
+    def test_create_cash_account_assigns_tenant_and_is_visible_in_list(self):
+        self.login()
+
+        create_response = self.client.post(
+            "/api/finance/cash-accounts/",
+            {
+                "name": "主资金账户",
+                "type": "BANK",
+                "account_type": "BANK",
+                "account_no": "62220001",
+                "bank_name": "测试银行",
+                "currency": "CNY",
+                "current_balance": "1000.00",
+                "status": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        account = CashAccount.objects.get(id=create_response.data["id"])
+        self.assertEqual(account.tenant_id, self.tenant.id)
+
+        list_response = self.client.get("/api/finance/cash-accounts/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in list_response.data], [account.id])
+
+
+class ERPPlatformIsolationApiTest(APITestCase):
+    def setUp(self):
+        self.platform_user = User.objects.create_user(username="erp_platform_owner", password="password")
+        self.blueprint = SystemBlueprint.objects.create(
+            key="erp_platform_bp",
+            name="ERP Platform BP",
+            created_by=self.platform_user,
+        )
+        self.version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v1",
+            config_json=build_platform_file_config(dict_center=True),
+            created_by=self.platform_user,
+            is_published=True,
+        )
+        self.instance = SystemInstance.objects.create(
+            blueprint=self.blueprint,
+            blueprint_version=self.version,
+            name="ERP Platform SaaS",
+            mode="SAAS",
+            runtime_mode="SAAS",
+            status="ACTIVE",
+            created_by=self.platform_user,
+        )
+        self.tenant = Tenant.objects.create(
+            code="erp-platform-tenant-a",
+            name="ERP Platform Tenant A",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        self.other_tenant = Tenant.objects.create(
+            code="erp-platform-tenant-b",
+            name="ERP Platform Tenant B",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        other_bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.other_tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        self.erp_user = bind_result.initial_admin.user
+        self.initial_password = bind_result.initial_admin.initial_password
+        self.other_erp_user = other_bind_result.initial_admin.user
+        self.dict_type = DictType.objects.create(
+            dict_code="PRIVATE_LEVELS",
+            dict_name="私有等级",
+            created_by=self.other_erp_user,
+        )
+        DictItem.objects.create(
+            dict_type=self.dict_type,
+            item_code="L1",
+            item_name="一级",
+            status="ACTIVE",
+        )
+
+    def login(self):
+        response = self.client.post(
+            "/api/erp-auth/login/",
+            {
+                "tenant_code": self.tenant.code,
+                "username": self.erp_user.username,
+                "password": self.initial_password,
+            },
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+
+    def test_business_files_is_scoped_to_current_tenant(self):
+        File.objects.create(
+            file_name="tenant-a.txt",
+            file_ext=".txt",
+            mime_type="text/plain",
+            file_size=10,
+            storage_type="LOCAL",
+            bucket="",
+            object_key="uploads/a.txt",
+            file_url="/media/uploads/a.txt",
+            md5="a" * 32,
+            module="customer",
+            business_type="customer",
+            business_id=101,
+            access_level="BUSINESS",
+            uploaded_by=self.erp_user,
+        )
+        File.objects.create(
+            file_name="tenant-b.txt",
+            file_ext=".txt",
+            mime_type="text/plain",
+            file_size=10,
+            storage_type="LOCAL",
+            bucket="",
+            object_key="uploads/b.txt",
+            file_url="/media/uploads/b.txt",
+            md5="b" * 32,
+            module="customer",
+            business_type="customer",
+            business_id=101,
+            access_level="BUSINESS",
+            uploaded_by=self.other_erp_user,
+        )
+        self.login()
+
+        response = self.client.get(
+            "/api/platform/files/business/",
+            {
+                "module": "customer",
+                "business_type": "customer",
+                "business_id": 101,
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["file_name"] for item in response.data], ["tenant-a.txt"])
+
+    def test_dict_items_by_code_requires_explicit_permission(self):
+        self.login()
+
+        response = self.client.get(f"/api/platform/dict/items/{self.dict_type.dict_code}")
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class ERPSupplyChainTraceIsolationApiTest(APITestCase):
+    def setUp(self):
+        self.platform_user = User.objects.create_user(username="erp_trace_owner", password="password")
+        self.blueprint = SystemBlueprint.objects.create(
+            key="erp_trace_bp",
+            name="ERP Trace BP",
+            created_by=self.platform_user,
+        )
+        self.version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v1",
+            config_json=build_sales_supply_chain_config(),
+            created_by=self.platform_user,
+            is_published=True,
+        )
+        self.instance = SystemInstance.objects.create(
+            blueprint=self.blueprint,
+            blueprint_version=self.version,
+            name="ERP Trace SaaS",
+            mode="SAAS",
+            runtime_mode="SAAS",
+            status="ACTIVE",
+            created_by=self.platform_user,
+        )
+        self.tenant = Tenant.objects.create(
+            code="erp-trace-tenant-a",
+            name="ERP Trace Tenant A",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        self.other_tenant = Tenant.objects.create(
+            code="erp-trace-tenant-b",
+            name="ERP Trace Tenant B",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        other_bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.other_tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        self.erp_user = bind_result.initial_admin.user
+        self.initial_password = bind_result.initial_admin.initial_password
+        self.other_erp_user = other_bind_result.initial_admin.user
+        self.category = ProductCategory.objects.create(name="Trace Category A", tenant=self.tenant, status=True)
+        self.unit = Unit.objects.create(name="箱", code="TRACE-UNIT-A", tenant=self.tenant, status=True)
+        self.product = Product.objects.create(
+            tenant=self.tenant,
+            product_code="TRACE-PROD-A",
+            name="Trace Product A",
+            category=self.category,
+            unit=self.unit,
+            status="ACTIVE",
+        )
+        self.warehouse = Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="TRACE-WH-A",
+            warehouse_name="Trace Warehouse A",
+            status=True,
+        )
+        self.other_category = ProductCategory.objects.create(name="Trace Category B", tenant=self.other_tenant, status=True)
+        self.other_unit = Unit.objects.create(name="袋", code="TRACE-UNIT-B", tenant=self.other_tenant, status=True)
+        self.other_product = Product.objects.create(
+            tenant=self.other_tenant,
+            product_code="TRACE-PROD-B",
+            name="Trace Product B",
+            category=self.other_category,
+            unit=self.other_unit,
+            status="ACTIVE",
+        )
+        self.other_warehouse = Warehouse.objects.create(
+            tenant=self.other_tenant,
+            warehouse_code="TRACE-WH-B",
+            warehouse_name="Trace Warehouse B",
+            status=True,
+        )
+        self.transaction = InventoryTransaction.objects.create(
+            tenant=self.tenant,
+            transaction_no="TRACE-TX-A",
+            warehouse=self.warehouse,
+            product=self.product,
+            transaction_type="MANUAL_ADJUST",
+            direction="IN",
+            quantity="5.000",
+            before_qty="0.000",
+            after_qty="5.000",
+            operator=self.erp_user,
+        )
+        InventoryTransaction.objects.create(
+            tenant=self.other_tenant,
+            transaction_no="TRACE-TX-B",
+            warehouse=self.other_warehouse,
+            product=self.other_product,
+            transaction_type="MANUAL_ADJUST",
+            direction="IN",
+            quantity="9.000",
+            before_qty="0.000",
+            after_qty="9.000",
+            operator=self.other_erp_user,
+        )
+
+    def login(self):
+        response = self.client.post(
+            "/api/erp-auth/login/",
+            {
+                "tenant_code": self.tenant.code,
+                "username": self.erp_user.username,
+                "password": self.initial_password,
+            },
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+
+    def test_inventory_trace_is_scoped_to_current_tenant(self):
+        self.login()
+
+        own_response = self.client.get("/api/supply-chain/trace/", {"product_id": self.product.id})
+        other_response = self.client.get("/api/supply-chain/trace/", {"product_id": self.other_product.id})
+
+        self.assertEqual(own_response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["id"] for item in own_response.data], [self.transaction.id])
+        self.assertEqual(other_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(other_response.data, [])
+
+
+class ERPAccountingIsolationApiTest(APITestCase):
+    def setUp(self):
+        self.platform_user = User.objects.create_user(username="erp_accounting_owner", password="password")
+        self.blueprint = SystemBlueprint.objects.create(
+            key="erp_accounting_bp",
+            name="ERP Accounting BP",
+            created_by=self.platform_user,
+        )
+        self.version = SystemBlueprintVersion.objects.create(
+            blueprint=self.blueprint,
+            version="v1",
+            config_json=build_ar_finance_accounting_config(),
+            created_by=self.platform_user,
+            is_published=True,
+        )
+        self.instance = SystemInstance.objects.create(
+            blueprint=self.blueprint,
+            blueprint_version=self.version,
+            name="ERP Accounting SaaS",
+            mode="SAAS",
+            runtime_mode="SAAS",
+            status="ACTIVE",
+            created_by=self.platform_user,
+        )
+        self.tenant = Tenant.objects.create(
+            code="erp-accounting-tenant-a",
+            name="ERP Accounting Tenant A",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        self.other_tenant = Tenant.objects.create(
+            code="erp-accounting-tenant-b",
+            name="ERP Accounting Tenant B",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        bind_result = TenantService.bind_instance_to_tenant(
+            tenant=self.tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        TenantService.bind_instance_to_tenant(
+            tenant=self.other_tenant,
+            instance=self.instance,
+            blueprint_version=self.version,
+        )
+        self.erp_user = bind_result.initial_admin.user
+        self.initial_password = bind_result.initial_admin.initial_password
+        self.subject = AccountSubject.objects.create(
+            tenant=self.tenant,
+            code="1101-A",
+            name="Tenant A 科目",
+            category="ASSET",
+            balance_direction="DEBIT",
+            level=1,
+            is_leaf=True,
+            enabled=True,
+            created_by=self.erp_user,
+        )
+        self.other_subject = AccountSubject.objects.create(
+            tenant=self.other_tenant,
+            code="1101-B",
+            name="Tenant B 科目",
+            category="ASSET",
+            balance_direction="DEBIT",
+            level=1,
+            is_leaf=True,
+            enabled=True,
+        )
+
+    def login(self):
+        response = self.client.post(
+            "/api/erp-auth/login/",
+            {
+                "tenant_code": self.tenant.code,
+                "username": self.erp_user.username,
+                "password": self.initial_password,
+            },
+            format="json",
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+
+    def test_account_subject_update_rejects_cross_tenant_parent(self):
+        self.login()
+
+        response = self.client.patch(
+            f"/api/accounting/subjects/{self.subject.id}/",
+            {"parent": self.other_subject.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.subject.refresh_from_db()
+        self.assertIsNone(self.subject.parent_id)
+
 
 class ERPUserMasterDataApiTest(APITestCase):
     def setUp(self):
@@ -1763,6 +2247,45 @@ class ERPUserPurchaseAPFlowTest(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         warehouse = Warehouse.objects.get(id=response.data["id"])
         self.assertEqual(warehouse.manager_id, target_user.id)
+
+    def test_ap_account_list_supports_csv_status_filter(self):
+        pending_account = APAccount.objects.create(
+            tenant=self.tenant,
+            ap_no="AP-FILTER-001",
+            supplier=self.supplier,
+            total_amount=Decimal("100.00"),
+            paid_amount=Decimal("0.00"),
+            due_date="2026-07-31",
+            status="PENDING",
+        )
+        partial_account = APAccount.objects.create(
+            tenant=self.tenant,
+            ap_no="AP-FILTER-002",
+            supplier=self.supplier,
+            total_amount=Decimal("200.00"),
+            paid_amount=Decimal("50.00"),
+            due_date="2026-07-31",
+            status="PARTIAL",
+        )
+        APAccount.objects.create(
+            tenant=self.tenant,
+            ap_no="AP-FILTER-003",
+            supplier=self.supplier,
+            total_amount=Decimal("300.00"),
+            paid_amount=Decimal("300.00"),
+            due_date="2026-07-31",
+            status="PAID",
+        )
+
+        client = APIClient()
+        client.force_authenticate(self.erp_user)
+        response = client.get(
+            f"/api/ap-payable/accounts/?supplier={self.supplier.id}&status=PENDING,PARTIAL"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["id"] for item in response.data}
+        self.assertEqual(returned_ids, {pending_account.id, partial_account.id})
 
 
 class ERPUserARFinanceAccountingFlowTest(TestCase):

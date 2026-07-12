@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Sum, F
-from .models import Receivable, Receipt, WriteOff
+from .models import CustomerRefund, Receivable, Receipt, WriteOff
 from business_apps.sales.models import SalesOrder
 from business_apps.crm.services import CustomerCreditService
 from core_apps.erp_auth.compat import (
@@ -36,20 +36,34 @@ class ARService:
 
     @staticmethod
     def _update_receivable_status(receivable):
-        if receivable.written_off_amount >= receivable.amount:
-            receivable.status = 'PAID'
-        elif receivable.written_off_amount > 0:
-            receivable.status = 'PARTIAL_PAID'
+        if receivable.amount >= 0:
+            if receivable.written_off_amount >= receivable.amount:
+                receivable.status = 'PAID'
+            elif receivable.written_off_amount > 0:
+                receivable.status = 'PARTIAL_PAID'
+            else:
+                receivable.status = 'UNPAID'
         else:
-            receivable.status = 'UNPAID'
+            refund_total = abs(receivable.amount)
+            if receivable.written_off_amount >= refund_total:
+                receivable.status = 'REFUNDED'
+            elif receivable.written_off_amount > 0:
+                receivable.status = 'PARTIAL_REFUNDED'
+            else:
+                receivable.status = 'REFUND_PENDING'
 
     @staticmethod
     def generate_no(prefix):
         now = timezone.now()
         date_str = now.strftime('%Y%m%d')
         full_prefix = f"{prefix}{date_str}"
-        model = Receivable if prefix == 'AR' else (Receipt if prefix == 'RC' else WriteOff)
-        field = f"{'receivable' if prefix == 'AR' else ('receipt' if prefix == 'RC' else 'write_off')}_no"
+        model_map = {
+            'AR': (Receivable, 'receivable_no'),
+            'RC': (Receipt, 'receipt_no'),
+            'RF': (CustomerRefund, 'refund_no'),
+            'WO': (WriteOff, 'write_off_no'),
+        }
+        model, field = model_map[prefix]
         
         last_record = model.objects.filter(**{f"{field}__startswith": full_prefix}).order_by(f"-{field}").first()
         if last_record:
@@ -141,14 +155,20 @@ class ARService:
         if not return_order.sales_order_id or not return_order.customer_id:
             raise ValueError("销售退货单未关联销售订单或客户，无法执行应收反向调整")
 
+        from business_apps.supply_chain.services import SalesReturnService
+
         amount = Decimal('0')
-        sales_items_by_product = {}
-        for sales_item in return_order.sales_order.items.all():
-            sales_items_by_product.setdefault(sales_item.product_id, sales_item)
+        allocations_by_item = SalesReturnService.build_sales_order_item_allocations(
+            return_order,
+            exclude_return_order_id=return_order.id,
+        )
         for item in return_order.items.all():
-            sales_item = sales_items_by_product.get(item.product_id)
-            unit_price = sales_item.unit_price if sales_item else (item.product.sale_price or Decimal('0'))
-            amount += Decimal(str(item.quantity)) * Decimal(str(unit_price))
+            allocations = allocations_by_item.get(item.id, [])
+            if allocations:
+                for sales_item, allocated_quantity in allocations:
+                    amount += Decimal(str(allocated_quantity)) * Decimal(str(sales_item.unit_price))
+            else:
+                amount += Decimal(str(item.quantity)) * Decimal(str(item.product.sale_price or Decimal('0')))
 
         if amount <= 0:
             raise ValueError("销售退货单金额必须大于0")
@@ -172,10 +192,19 @@ class ARService:
             suffix = f"销售退货反向调整 {return_order.return_no}: -{delta}"
             receivable.remark = f"{receivable.remark}; {suffix}" if receivable.remark else suffix
             receivable.save(update_fields=['amount', 'status', 'remark', 'updated_at'])
+            WriteOff.objects.create(
+                tenant=receivable.tenant,
+                write_off_no=ARService.generate_no('WO'),
+                receivable=receivable,
+                receipt=None,
+                amount=delta,
+                write_off_type='RETURN_OFFSET',
+                **build_erp_user_fk_kwargs(WriteOff, user=operator, field_names=("operator",)),
+            )
             remaining -= delta
 
         if remaining > 0:
-            Receivable.objects.create(
+            refund_receivable = Receivable.objects.create(
                 tenant=return_order.tenant,
                 receivable_no=ARService.generate_no('AR'),
                 customer=return_order.customer,
@@ -184,13 +213,104 @@ class ARService:
                 amount=-remaining,
                 written_off_amount=Decimal('0'),
                 due_date=timezone.now().date(),
-                status='UNPAID',
+                status='REFUND_PENDING',
                 remark=f"销售退货红字应收: {return_order.return_no}",
                 **build_erp_user_and_dept_kwargs(Receivable, user=operator),
+            )
+            ARService.create_customer_refund(
+                customer=return_order.customer,
+                receivable=refund_receivable,
+                refund_date=timezone.now().date(),
+                operator=operator,
+                remark=f"销售退货自动生成退款单: {return_order.return_no}",
             )
 
         ARService._sync_customer_current_balance(return_order.customer, delta=-amount)
         return amount
+
+    @staticmethod
+    @transaction.atomic
+    def create_customer_refund(customer, receivable, refund_date, operator, payment_method='BANK_TRANSFER', cash_account=None, reference_no=None, remark=None):
+        if receivable.customer_id != customer.id:
+            raise ValueError("退款单与红字应收客户不一致")
+        if receivable.amount >= 0 or receivable.source_type != 'SALES_RETURN':
+            raise ValueError("只能基于销售退货红字应收生成退款单")
+        if receivable.balance <= 0:
+            raise ValueError("该红字应收已无待退款金额")
+        refund = CustomerRefund.objects.create(
+            tenant=customer.tenant,
+            refund_no=ARService.generate_no('RF'),
+            customer=customer,
+            receivable=receivable,
+            refund_amount=receivable.balance,
+            refund_date=refund_date,
+            payment_method=payment_method,
+            cash_account=cash_account,
+            reference_no=reference_no,
+            status='DRAFT',
+            remark=remark,
+            **build_erp_user_and_dept_kwargs(CustomerRefund, user=operator),
+        )
+        return refund
+
+    @staticmethod
+    @transaction.atomic
+    def approve_customer_refund(refund, operator):
+        refund = CustomerRefund.objects.select_for_update().get(id=refund.id)
+        if refund.status != 'DRAFT':
+            raise ValueError("只有草稿状态的退款单可以审核")
+        refund.status = 'APPROVED'
+        refund.approved_by = build_erp_user_fk_kwargs(
+            CustomerRefund,
+            user=operator,
+            field_names=("approved_by",),
+        ).get("approved_by")
+        refund.approved_at = timezone.now()
+        refund.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+        return refund
+
+    @staticmethod
+    @transaction.atomic
+    def execute_customer_refund(refund, operator):
+        refund = CustomerRefund.objects.select_for_update().get(id=refund.id)
+        if refund.status != 'APPROVED':
+            raise ValueError("只有已审核状态的退款单可以执行")
+        if refund.executed_at:
+            raise ValueError("退款单已执行")
+
+        receivable = Receivable.objects.select_for_update().get(id=refund.receivable_id)
+        if receivable.balance < refund.refund_amount:
+            raise ValueError("退款金额超过红字应收待退款余额")
+
+        if refund.cash_account:
+            from business_apps.finance.models import CashAccount, CashAccountTransaction
+            acc = CashAccount.objects.select_for_update().get(id=refund.cash_account_id)
+            if acc.current_balance < refund.refund_amount:
+                raise ValueError(f"账户余额不足！当前: {acc.current_balance}, 需要: {refund.refund_amount}")
+            CashAccountTransaction.record_change(
+                cash_account=acc,
+                direction='OUTFLOW',
+                amount=refund.refund_amount,
+                source_type='AR_REFUND',
+                source_id=refund.id,
+                source_document_no_snapshot=refund.refund_no,
+                transaction_date=refund.refund_date,
+                operator=operator,
+                remark=refund.remark,
+            )
+
+        receivable.written_off_amount += refund.refund_amount
+        ARService._update_receivable_status(receivable)
+        receivable.save(update_fields=['written_off_amount', 'status', 'updated_at'])
+        ARService._sync_customer_current_balance(refund.customer, delta=refund.refund_amount)
+
+        refund.status = 'COMPLETED'
+        refund.executed_at = timezone.now()
+        refund.save(update_fields=['status', 'executed_at', 'updated_at'])
+
+        from business_apps.accounting.services import PostingService
+        PostingService.post_customer_refund_execution(refund, operator)
+        return refund
 
     @staticmethod
     @transaction.atomic

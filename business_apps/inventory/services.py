@@ -6,7 +6,7 @@ from core_apps.erp_auth.models import ERPUser
 from .models import Product, Warehouse, Inventory, InventoryTransaction, Stocktake, StocktakeItem
 from business_apps.platform.services import CodeRuleService
 from business_apps.inventory.policies import InventoryPolicy
-from core_apps.erp_auth.compat import build_erp_user_fk_kwargs
+from core_apps.erp_auth.compat import build_erp_user_fk_kwargs, get_erp_user_id
 from core_apps.policies.registry import get_policy
 from .warehouse_utils import find_default_warehouse
 
@@ -357,10 +357,89 @@ class InventoryService:
 
     @staticmethod
     @transaction.atomic
-    def complete_stocktake(stocktake, operator):
+    def submit_stocktake(stocktake, operator, runtime_config=None):
+        stocktake = Stocktake.objects.select_for_update().get(id=stocktake.id)
+        policy = InventoryService.get_policy(user=operator, runtime_config=runtime_config)
+        if stocktake.status not in ("DRAFT", "IN_PROGRESS"):
+            raise ValueError("当前状态不允许提交审核")
+
+        erp_user_id = get_erp_user_id(operator)
+        if erp_user_id is not None:
+            stocktake.submitted_by_id = erp_user_id
+        else:
+            stocktake.submitted_by = None
+        stocktake.submitted_at = timezone.now()
+
+        if policy.stocktake_approval_enabled():
+            stocktake.status = "PENDING_APPROVAL"
+            stocktake.approved_by = None
+            stocktake.approved_at = None
+            stocktake.save(
+                update_fields=[
+                    "status",
+                    "submitted_by",
+                    "submitted_at",
+                    "approved_by",
+                    "approved_at",
+                ]
+            )
+            return stocktake
+
+        stocktake.status = "APPROVED"
+        stocktake.approved_by = build_erp_user_fk_kwargs(
+            Stocktake,
+            user=operator,
+            field_names=("approved_by",),
+        ).get("approved_by")
+        stocktake.approved_at = timezone.now()
+        stocktake.save(
+            update_fields=[
+                "status",
+                "submitted_by",
+                "submitted_at",
+                "approved_by",
+                "approved_at",
+            ]
+        )
+        return stocktake
+
+    @staticmethod
+    @transaction.atomic
+    def approve_stocktake(stocktake, operator, runtime_config=None):
+        stocktake = Stocktake.objects.select_for_update().get(id=stocktake.id)
+        policy = InventoryService.get_policy(user=operator, runtime_config=runtime_config)
+        if not policy.stocktake_approval_enabled():
+            raise ValueError("当前配置为免审批，盘点单无需审核")
+        if stocktake.status != "PENDING_APPROVAL":
+            raise ValueError("只有待审核状态的盘点单可以审核")
+
+        erp_user_id = get_erp_user_id(operator)
+        if erp_user_id is not None and (
+            stocktake.created_by_id == erp_user_id or stocktake.submitted_by_id == erp_user_id
+        ):
+            raise ValueError("审核人不能是盘点单创建人或提交人")
+
+        stocktake.status = "APPROVED"
+        stocktake.approved_by = build_erp_user_fk_kwargs(
+            Stocktake,
+            user=operator,
+            field_names=("approved_by",),
+        ).get("approved_by")
+        stocktake.approved_at = timezone.now()
+        stocktake.save(update_fields=["status", "approved_by", "approved_at"])
+        return stocktake
+
+    @staticmethod
+    @transaction.atomic
+    def complete_stocktake(stocktake, operator, runtime_config=None):
         """Processes a stocktake and creates necessary adjustments"""
-        if stocktake.status != 'IN_PROGRESS':
-            raise ValueError("只有处理中的盘点单可以完成")
+        stocktake = Stocktake.objects.select_for_update().get(id=stocktake.id)
+        policy = InventoryService.get_policy(user=operator, runtime_config=runtime_config)
+        if policy.stocktake_approval_enabled():
+            if stocktake.status != "APPROVED":
+                raise ValueError("只有已审核的盘点单可以完成")
+        elif stocktake.status not in ("APPROVED", "IN_PROGRESS"):
+            raise ValueError("只有已提交的盘点单可以完成")
 
         adjustments = []
         for item in stocktake.items.all():
@@ -427,8 +506,11 @@ class InventoryService:
         if Inventory.objects.filter(warehouse=warehouse).exclude(current_qty=0, locked_qty=0).exists():
             raise ValueError("仓库仍有库存或锁定库存，不能停用")
 
-        if Stocktake.objects.filter(warehouse=warehouse, status__in=("DRAFT", "IN_PROGRESS")).exists():
-            raise ValueError("仓库仍有关联的草稿/进行中盘点单，不能停用")
+        if Stocktake.objects.filter(
+            warehouse=warehouse,
+            status__in=("DRAFT", "IN_PROGRESS", "PENDING_APPROVAL", "APPROVED"),
+        ).exists():
+            raise ValueError("仓库仍有关联的未完成盘点单，不能停用")
 
     @staticmethod
     def validate_warehouse_can_be_deleted(*, warehouse: Warehouse, runtime_config) -> None:

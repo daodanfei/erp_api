@@ -200,6 +200,13 @@ def _should_auto_create_default_warehouse(inventory_state: dict[str, object]) ->
     return not bool(inventory_state["multi_warehouse"]) and not bool(inventory_state["warehouse_required"])
 
 
+def _refresh_existing_tenant_super_admin_role(*, tenant: Tenant) -> None:
+    user = ERPUserProvisionService.get_tenant_super_admin(tenant=tenant)
+    if user is None:
+        return
+    ERPUserProvisionService.ensure_super_admin_role(user=user)
+
+
 class TenantService:
     PURGE_EXCLUDED_MODELS = {
         ("tenant", "Tenant"),
@@ -319,6 +326,7 @@ class TenantService:
             tenant=tenant,
             configured_code=normalized["module_configs"].get("inventory", {}).get("defaults", {}).get(DEFAULT_WAREHOUSE_CODE),
         )
+        _refresh_existing_tenant_super_admin_role(tenant=tenant)
         return snapshot
 
     @staticmethod

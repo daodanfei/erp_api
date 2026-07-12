@@ -1,13 +1,18 @@
+from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from django.test import RequestFactory, TestCase
 
-from business_apps.inventory.models import Product, ProductCategory, Unit
+from business_apps.inventory.models import Inventory, Product, ProductCategory, Unit
 from business_apps.inventory.services import InventoryService
 from business_apps.inventory.serializers import ProductCategorySerializer, ProductSerializer, StocktakeSerializer
-from business_apps.inventory.models import Warehouse
+from business_apps.inventory.models import Stocktake, Warehouse
+from business_apps.supply_chain.models import TransferOrder
 from business_apps.supply_chain.serializers import TransferOrderSerializer
+from business_apps.supply_chain.services import TransferService
 from business_apps.inventory.views import ProductCategoryViewSet
+from core_apps.erp_auth.models import ERPUser
 from core_apps.tenant.models import Tenant
 
 
@@ -180,4 +185,213 @@ class WarehouseGuardTest(TestCase):
             InventoryService.validate_warehouse_can_be_deleted(
                 warehouse=warehouse,
                 runtime_config=self._single_warehouse_runtime_config(tenant),
+            )
+
+
+class TransferOrderQuantityValidationTest(TestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(
+            code="tenant-transfer-qty",
+            name="Tenant Transfer Qty",
+            status="ACTIVE",
+        )
+        self.user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="transfer_qty_user",
+            password="password",
+            must_change_password=False,
+        )
+        self.category = ProductCategory.objects.create(
+            tenant=self.tenant,
+            name="调拨分类",
+            status=True,
+        )
+        self.unit = Unit.objects.create(
+            tenant=self.tenant,
+            name="件",
+            code="INV-UNIT-TRANSFER-001",
+            status=True,
+        )
+        self.product = Product.objects.create(
+            tenant=self.tenant,
+            product_code="INV-TRANSFER-001",
+            name="调拨商品",
+            category=self.category,
+            unit=self.unit,
+            status="ACTIVE",
+            created_by=self.user,
+        )
+        self.from_warehouse = Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="INV-TR-WH-001",
+            warehouse_name="调出仓",
+            status=True,
+        )
+        self.to_warehouse = Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="INV-TR-WH-002",
+            warehouse_name="调入仓",
+            status=True,
+        )
+        Inventory.objects.create(
+            tenant=self.tenant,
+            warehouse=self.from_warehouse,
+            product=self.product,
+            current_qty=Decimal("10"),
+            locked_qty=Decimal("4"),
+        )
+
+    def _policy(self):
+        return SimpleNamespace(
+            transfer_enabled=lambda: True,
+            transfer_approval_enabled=lambda: True,
+        )
+
+    @patch("business_apps.supply_chain.services.get_policy")
+    def test_create_order_rejects_quantity_above_available_stock(self, mocked_get_policy):
+        mocked_get_policy.return_value = self._policy()
+
+        with self.assertRaisesMessage(ValueError, "调出仓库可用库存不足：调拨商品，可用库存6.000，调拨数量6.500"):
+            TransferService.create_order(
+                self.from_warehouse,
+                self.to_warehouse,
+                [{"product": self.product, "quantity": Decimal("6.5")}],
+                self.user,
+            )
+
+    @patch("business_apps.supply_chain.services.get_policy")
+    def test_update_order_rejects_aggregated_duplicate_item_quantity_above_available_stock(self, mocked_get_policy):
+        mocked_get_policy.return_value = self._policy()
+        order = TransferOrder.objects.create(
+            tenant=self.tenant,
+            transfer_no="TR-TEST-001",
+            from_warehouse=self.from_warehouse,
+            to_warehouse=self.to_warehouse,
+            status="DRAFT",
+            created_by=self.user,
+        )
+
+        with self.assertRaisesMessage(ValueError, "调出仓库可用库存不足：调拨商品，可用库存6.000，调拨数量7.000"):
+            TransferService.update_order(
+                order,
+                self.from_warehouse,
+                self.to_warehouse,
+                [
+                    {"product": self.product, "quantity": Decimal("3")},
+                    {"product": self.product, "quantity": Decimal("4")},
+                ],
+                self.user,
+            )
+
+
+class StocktakeApprovalWorkflowTest(TestCase):
+    def setUp(self):
+        self.tenant = Tenant.objects.create(
+            code="tenant-stocktake-approval",
+            name="Tenant Stocktake Approval",
+            status="ACTIVE",
+        )
+        self.creator = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="stocktake_creator",
+            password="password",
+            must_change_password=False,
+        )
+        self.approver = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="stocktake_approver",
+            password="password",
+            must_change_password=False,
+        )
+        self.warehouse = Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="STK-WH-001",
+            warehouse_name="盘点仓库",
+            status=True,
+        )
+
+    def _runtime_config(self, approval_enabled: bool):
+        return SimpleNamespace(
+            tenant=self.tenant,
+            is_enabled=lambda module_key: module_key == "inventory",
+            is_feature_enabled=lambda module_key, feature_key: (
+                feature_key == "stocktake" or (feature_key == "stocktake_approval" and approval_enabled)
+            ),
+            get_default=lambda key, default=None, module_key=None: "MAIN",
+        )
+
+    def _create_stocktake(self, status="DRAFT"):
+        return Stocktake.objects.create(
+            tenant=self.tenant,
+            stocktake_no=f"STK-{Stocktake.objects.count() + 1:03d}",
+            warehouse=self.warehouse,
+            status=status,
+            created_by=self.creator,
+        )
+
+    def test_submit_moves_to_pending_approval_when_feature_enabled(self):
+        stocktake = self._create_stocktake()
+
+        InventoryService.submit_stocktake(
+            stocktake=stocktake,
+            operator=self.creator,
+            runtime_config=self._runtime_config(True),
+        )
+
+        stocktake.refresh_from_db()
+        self.assertEqual(stocktake.status, "PENDING_APPROVAL")
+        self.assertEqual(stocktake.submitted_by, self.creator)
+        self.assertIsNone(stocktake.approved_by)
+        self.assertIsNotNone(stocktake.submitted_at)
+
+    def test_submit_auto_approves_when_feature_disabled(self):
+        stocktake = self._create_stocktake()
+
+        InventoryService.submit_stocktake(
+            stocktake=stocktake,
+            operator=self.creator,
+            runtime_config=self._runtime_config(False),
+        )
+
+        stocktake.refresh_from_db()
+        self.assertEqual(stocktake.status, "APPROVED")
+        self.assertEqual(stocktake.submitted_by, self.creator)
+        self.assertEqual(stocktake.approved_by, self.creator)
+        self.assertIsNotNone(stocktake.approved_at)
+
+    def test_approve_rejects_creator_or_submitter(self):
+        stocktake = self._create_stocktake(status="PENDING_APPROVAL")
+        stocktake.submitted_by = self.creator
+        stocktake.save(update_fields=["submitted_by"])
+
+        with self.assertRaisesMessage(ValueError, "审核人不能是盘点单创建人或提交人"):
+            InventoryService.approve_stocktake(
+                stocktake=stocktake,
+                operator=self.creator,
+                runtime_config=self._runtime_config(True),
+            )
+
+    def test_complete_requires_approved_status_when_feature_enabled(self):
+        stocktake = self._create_stocktake(status="PENDING_APPROVAL")
+
+        with self.assertRaisesMessage(ValueError, "只有已审核的盘点单可以完成"):
+            InventoryService.complete_stocktake(
+                stocktake=stocktake,
+                operator=self.approver,
+                runtime_config=self._runtime_config(True),
+            )
+
+    def test_disable_warehouse_rejects_pending_or_approved_stocktake(self):
+        Stocktake.objects.create(
+            tenant=self.tenant,
+            stocktake_no="STK-PENDING-001",
+            warehouse=self.warehouse,
+            status="PENDING_APPROVAL",
+            created_by=self.creator,
+        )
+
+        with self.assertRaisesMessage(ValueError, "仓库仍有关联的未完成盘点单，不能停用"):
+            InventoryService.validate_warehouse_can_be_disabled(
+                warehouse=self.warehouse,
+                runtime_config=self._runtime_config(True),
             )

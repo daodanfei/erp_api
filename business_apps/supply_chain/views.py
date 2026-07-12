@@ -3,8 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.core.exceptions import ObjectDoesNotExist
 from django_filters.rest_framework import DjangoFilterBackend
+from core_apps.common.permissions import ERPActionPermission, ERPUserOnly, ModuleEnabledPermission
 from core_apps.common.viewsets import BaseBusinessViewSet
-from core_apps.common.permissions import ERPActionPermission
 from .models import OutboundOrder, TransferOrder, SalesReturnOrder, PurchaseReturnOrder, InventoryAlert
 from .serializers import (
     OutboundOrderSerializer, OutboundOrderListSerializer,
@@ -461,10 +461,11 @@ class InventoryAlertViewSet(BaseBusinessViewSet):
 
 class InventoryTraceViewSet(viewsets.ViewSet):
     """库存追溯API"""
-    permission_classes = [ERPActionPermission]
+    module_key = "supply_chain"
+    permission_classes = [ERPUserOnly, ModuleEnabledPermission, ERPActionPermission]
 
     permission_map = {
-        'trace': 'supply_chain:alert:view',
+        'list': 'supply_chain:trace:view',
     }
 
     def list(self, request):

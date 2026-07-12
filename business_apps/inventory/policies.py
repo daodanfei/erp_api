@@ -11,6 +11,7 @@ from .features import (
     FEATURE_NEGATIVE_STOCK_ALLOWED,
     FEATURE_SERIAL_NUMBER,
     FEATURE_STOCKTAKE,
+    FEATURE_STOCKTAKE_APPROVAL,
     FEATURE_WAREHOUSE_REQUIRED_ON_TRANSACTION,
     FIELD_INVENTORY_TRANSACTION_WAREHOUSE,
     FIELD_PURCHASE_ORDER_ITEM_WAREHOUSE,
@@ -40,6 +41,9 @@ class InventoryPolicy(BasePolicy):
 
     def stocktake_enabled(self) -> bool:
         return self.is_feature_enabled(FEATURE_STOCKTAKE, default=True)
+
+    def stocktake_approval_enabled(self) -> bool:
+        return self.is_feature_enabled(FEATURE_STOCKTAKE_APPROVAL, default=False)
 
     def negative_stock_allowed(self) -> bool:
         return self.is_feature_enabled(FEATURE_NEGATIVE_STOCK_ALLOWED, default=False)

@@ -171,7 +171,7 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
     def statistics(self, request):
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
-        stats = PurchaseOrderService.get_statistics(start_date, end_date)
+        stats = PurchaseOrderService.get_statistics(request.user, start_date, end_date)
         return Response(stats)
 
     @action(detail=True, methods=['post'])

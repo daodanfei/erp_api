@@ -11,11 +11,44 @@ from .models import (
 from business_apps.inventory.services import InventoryService
 from business_apps.inventory.models import Inventory
 from business_apps.platform.services import CodeRuleService
+from core_apps.common.viewsets import apply_erp_tenant_scope
 from core_apps.erp_auth.compat import (
     build_erp_user_and_dept_kwargs,
     get_erp_user_id,
 )
 from core_apps.policies.registry import get_policy
+
+
+def _aggregate_requested_quantities(items_data):
+    requested_quantities = {}
+    for item in items_data:
+        product = item["product"]
+        quantity = Decimal(str(item["quantity"]))
+        if quantity <= 0:
+            raise ValueError(f"退货数量必须大于0：{product.name}")
+        requested_quantities[product.id] = requested_quantities.get(product.id, Decimal("0")) + quantity
+    return requested_quantities
+
+
+def _allocate_quantity_to_source_lines(source_lines, quantity_field, requested_quantity):
+    remaining = Decimal(str(requested_quantity))
+    allocations = []
+
+    for source_line in source_lines:
+        if isinstance(source_line, dict):
+            available_quantity = Decimal(str(source_line.get(quantity_field, 0)))
+        else:
+            available_quantity = Decimal(str(getattr(source_line, quantity_field, 0)))
+        if available_quantity <= 0 or remaining <= 0:
+            continue
+        allocated_quantity = min(available_quantity, remaining)
+        allocations.append((source_line, allocated_quantity))
+        remaining -= allocated_quantity
+
+    if remaining > 0:
+        raise ValueError("退货数量超过来源单据可退数量")
+
+    return allocations
 
 
 class OutboundService:
@@ -289,6 +322,46 @@ class TransferService:
         )
 
     @staticmethod
+    def format_quantity(value):
+        return Decimal(str(value)).quantize(Decimal("0.001"))
+
+    @staticmethod
+    def validate_stock_availability(from_warehouse, items_data):
+        product_totals = {}
+        product_refs = {}
+
+        for item in items_data:
+            product = item['product']
+            quantity = Decimal(str(item['quantity']))
+            if quantity <= 0:
+                raise ValueError(f"调拨数量必须大于0：{product.name}")
+            product_totals[product.id] = product_totals.get(product.id, Decimal("0")) + quantity
+            product_refs[product.id] = product
+
+        if not product_totals:
+            return
+
+        inventory_map = {
+            inventory.product_id: inventory
+            for inventory in Inventory.objects.filter(
+                warehouse=from_warehouse,
+                product_id__in=product_totals.keys(),
+            )
+        }
+
+        for product_id, total_quantity in product_totals.items():
+            product = product_refs[product_id]
+            inventory = inventory_map.get(product_id)
+            if inventory is None:
+                raise ValueError(f"调出仓库无库存：{product.name}")
+            if inventory.available_qty < total_quantity:
+                raise ValueError(
+                    f"调出仓库可用库存不足：{product.name}，"
+                    f"可用库存{TransferService.format_quantity(inventory.available_qty)}，"
+                    f"调拨数量{TransferService.format_quantity(total_quantity)}"
+                )
+
+    @staticmethod
     @transaction.atomic
     def create_order(from_warehouse, to_warehouse, items_data, user, remark=None):
         policy = get_policy("supply_chain", user=user)
@@ -297,6 +370,7 @@ class TransferService:
         if from_warehouse.id == to_warehouse.id:
             raise ValueError("禁止同仓库调拨")
         TransferService.validate_products(items_data)
+        TransferService.validate_stock_availability(from_warehouse, items_data)
 
         order = TransferOrder.objects.create(
             tenant=from_warehouse.tenant,
@@ -331,6 +405,7 @@ class TransferService:
         if from_warehouse.id == to_warehouse.id:
             raise ValueError("禁止同仓库调拨")
         TransferService.validate_products(items_data)
+        TransferService.validate_stock_availability(from_warehouse, items_data)
 
         order.from_warehouse = from_warehouse
         order.to_warehouse = to_warehouse
@@ -364,6 +439,10 @@ class TransferService:
         if order.items.count() == 0:
             raise ValueError("调拨单明细不能为空")
         TransferService.validate_order_references(order)
+        TransferService.validate_stock_availability(
+            order.from_warehouse,
+            [{'product': item.product, 'quantity': item.quantity} for item in order.items.select_related('product').all()],
+        )
         erp_user_id = get_erp_user_id(user)
         if policy.transfer_approval_enabled():
             order.status = 'PENDING_APPROVAL'
@@ -415,17 +494,10 @@ class TransferService:
         if erp_user_id is not None and order.approved_by_id == erp_user_id:
             raise ValueError("调出确认人不能是审核人")
 
-        # 校验调出仓库库存充足性
-        for item in order.items.all():
-            try:
-                inv = Inventory.objects.get(warehouse=order.from_warehouse, product=item.product)
-                if inv.current_qty < item.quantity:
-                    raise ValueError(
-                        f"调出仓库库存不足：{item.product_name_snapshot}，"
-                        f"当前库存{inv.current_qty}，调拨数量{item.quantity}"
-                    )
-            except Inventory.DoesNotExist:
-                raise ValueError(f"调出仓库无库存：{item.product_name_snapshot}")
+        TransferService.validate_stock_availability(
+            order.from_warehouse,
+            [{'product': item.product, 'quantity': item.quantity} for item in order.items.select_related('product').all()],
+        )
 
         for item in order.items.all():
             InventoryService.change_stock(
@@ -531,19 +603,104 @@ class SalesReturnService:
                 raise ValueError(f"商品已停用：{product.name}")
 
     @staticmethod
+    def _resolve_customer(customer, sales_order):
+        if sales_order and customer and sales_order.customer_id != customer.id:
+            raise ValueError("销售退货单客户必须与销售订单一致")
+        return customer or (sales_order.customer if sales_order else None)
+
+    @staticmethod
+    def _require_sales_order(sales_order):
+        if sales_order is None:
+            raise ValueError("销售退货单必须关联销售订单")
+
+    @staticmethod
+    def _validate_return_quantities(sales_order, items_data, exclude_return_order_id=None):
+        SalesReturnService._require_sales_order(sales_order)
+
+        requested_quantities = _aggregate_requested_quantities(items_data)
+        shipped_quantities = {}
+        for order_item in sales_order.items.all():
+            shipped_quantity = Decimal(str(order_item.shipped_quantity))
+            if shipped_quantity <= 0:
+                continue
+            shipped_quantities[order_item.product_id] = shipped_quantities.get(order_item.product_id, Decimal("0")) + shipped_quantity
+
+        existing_returns = sales_order.return_orders.exclude(status="CANCELLED")
+        if exclude_return_order_id is not None:
+            existing_returns = existing_returns.exclude(id=exclude_return_order_id)
+
+        occupied_quantities = {}
+        for return_item in SalesReturnOrderItem.objects.filter(return_order__in=existing_returns):
+            occupied_quantities[return_item.product_id] = occupied_quantities.get(return_item.product_id, Decimal("0")) + Decimal(str(return_item.quantity))
+
+        for product_id, requested_quantity in requested_quantities.items():
+            product = next(item["product"] for item in items_data if item["product"].id == product_id)
+            available_quantity = shipped_quantities.get(product_id, Decimal("0")) - occupied_quantities.get(product_id, Decimal("0"))
+            if requested_quantity > available_quantity:
+                raise ValueError(
+                    f"销售退货数量超出可退范围：{product.name}，"
+                    f"已发货{shipped_quantities.get(product_id, Decimal('0')):.3f}，"
+                    f"其他退货已占用{occupied_quantities.get(product_id, Decimal('0')):.3f}，"
+                    f"本次申请{requested_quantity:.3f}"
+                )
+
+    @staticmethod
+    def build_sales_order_item_allocations(return_order, exclude_return_order_id=None):
+        sales_order = return_order.sales_order
+        if sales_order is None:
+            return {}
+
+        source_lines_by_product = {}
+        for source_line in sales_order.items.order_by("id"):
+            source_lines_by_product.setdefault(source_line.product_id, []).append({
+                "order_item": source_line,
+                "remaining_quantity": Decimal(str(source_line.shipped_quantity)),
+            })
+
+        previous_returns = sales_order.return_orders.filter(status="COMPLETED")
+        if exclude_return_order_id is not None:
+            previous_returns = previous_returns.exclude(id=exclude_return_order_id)
+
+        for previous_item in SalesReturnOrderItem.objects.filter(return_order__in=previous_returns).order_by("id"):
+            source_lines = source_lines_by_product.get(previous_item.product_id, [])
+            allocations = _allocate_quantity_to_source_lines(
+                source_lines,
+                "remaining_quantity",
+                previous_item.quantity,
+            )
+            for source_line, allocated_quantity in allocations:
+                source_line["remaining_quantity"] -= allocated_quantity
+
+        allocations_by_product = {}
+        for item in return_order.items.all().order_by("id"):
+            source_lines = source_lines_by_product.get(item.product_id, [])
+            allocations = _allocate_quantity_to_source_lines(
+                source_lines,
+                "remaining_quantity",
+                item.quantity,
+            )
+            allocations_by_product[item.id] = [
+                (allocation["order_item"], allocated_quantity)
+                for allocation, allocated_quantity in allocations
+            ]
+            for allocation, allocated_quantity in allocations:
+                allocation["remaining_quantity"] -= allocated_quantity
+
+        return allocations_by_product
+
+    @staticmethod
     @transaction.atomic
     def create_order(customer, sales_order, warehouse, items_data, user, reason=None, remark=None):
         policy = get_policy("supply_chain", user=user)
         if not policy.sales_return_enabled():
             raise ValueError("当前配置未启用销售退货")
+        SalesReturnService._require_sales_order(sales_order)
+        customer = SalesReturnService._resolve_customer(customer, sales_order)
         SalesReturnService.validate_customer(customer)
         SalesReturnService.validate_products(items_data)
+        SalesReturnService._validate_return_quantities(sales_order, items_data)
         order = SalesReturnOrder.objects.create(
-            tenant=(
-                customer.tenant if customer else (
-                    sales_order.tenant if sales_order else warehouse.tenant
-                )
-            ),
+            tenant=sales_order.tenant,
             return_no=SalesReturnService.generate_no(),
             customer=customer,
             customer_name_snapshot=customer.customer_name if customer else None,
@@ -586,6 +743,12 @@ class SalesReturnService:
         order = SalesReturnOrder.objects.select_for_update().get(id=order.id)
         if not order.can_transition_to('COMPLETED'):
             raise ValueError("当前状态不允许完成退货")
+        SalesReturnService._require_sales_order(order.sales_order)
+        SalesReturnService._validate_return_quantities(
+            order.sales_order,
+            [{"product": item.product, "quantity": item.quantity} for item in order.items.all()],
+            exclude_return_order_id=order.id,
+        )
 
         for item in order.items.all():
             InventoryService.change_stock(
@@ -601,14 +764,12 @@ class SalesReturnService:
 
         order.status = 'COMPLETED'
         order.completed_at = timezone.now()
-        if order.sales_order_id and order.customer_id:
+        if order.customer_id:
             from business_apps.ar_receivable.services import ARService
             ARService.reverse_ar_for_sales_return(order, user)
             from business_apps.accounting.services import PostingService
             PostingService.post_sales_return(order, user)
             order.finance_status = 'ADJUSTED'
-        else:
-            order.finance_status = 'NOT_REQUIRED'
         order.save(update_fields=['status', 'completed_at', 'finance_status', 'updated_at'])
         return order
 
@@ -644,19 +805,91 @@ class PurchaseReturnService:
                 raise ValueError(f"商品已停用：{product.name}")
 
     @staticmethod
+    def _resolve_supplier(supplier, purchase_order):
+        if purchase_order and supplier and purchase_order.supplier_id != supplier.id:
+            raise ValueError("采购退货单供应商必须与采购订单一致")
+        return supplier or (purchase_order.supplier if purchase_order else None)
+
+    @staticmethod
+    def _require_purchase_order(purchase_order):
+        if purchase_order is None:
+            raise ValueError("采购退货单必须关联采购订单")
+
+    @staticmethod
+    def _validate_return_quantities(purchase_order, items_data, exclude_return_order_id=None):
+        PurchaseReturnService._require_purchase_order(purchase_order)
+
+        requested_quantities = _aggregate_requested_quantities(items_data)
+        received_quantities = {}
+        for order_item in purchase_order.items.all():
+            received_quantity = Decimal(str(order_item.received_quantity))
+            if received_quantity <= 0:
+                continue
+            received_quantities[order_item.product_id] = received_quantities.get(order_item.product_id, Decimal("0")) + received_quantity
+
+        existing_returns = purchase_order.return_orders.exclude(status="CANCELLED")
+        if exclude_return_order_id is not None:
+            existing_returns = existing_returns.exclude(id=exclude_return_order_id)
+
+        occupied_quantities = {}
+        for return_item in PurchaseReturnOrderItem.objects.filter(return_order__in=existing_returns):
+            occupied_quantities[return_item.product_id] = occupied_quantities.get(return_item.product_id, Decimal("0")) + Decimal(str(return_item.quantity))
+
+        for product_id, requested_quantity in requested_quantities.items():
+            product = next(item["product"] for item in items_data if item["product"].id == product_id)
+            available_quantity = received_quantities.get(product_id, Decimal("0")) - occupied_quantities.get(product_id, Decimal("0"))
+            if requested_quantity > available_quantity:
+                raise ValueError(
+                    f"采购退货数量超出可退范围：{product.name}，"
+                    f"已收货{received_quantities.get(product_id, Decimal('0')):.3f}，"
+                    f"其他退货已占用{occupied_quantities.get(product_id, Decimal('0')):.3f}，"
+                    f"本次申请{requested_quantity:.3f}"
+                )
+
+    @staticmethod
+    def build_purchase_order_item_allocations(return_order):
+        purchase_order = return_order.purchase_order
+        if purchase_order is None:
+            return {}
+
+        source_lines_by_product = {}
+        for source_line in purchase_order.items.select_for_update().order_by("id"):
+            remaining_quantity = Decimal(str(source_line.received_quantity)) - Decimal(str(source_line.returned_quantity))
+            source_lines_by_product.setdefault(source_line.product_id, []).append({
+                "order_item": source_line,
+                "remaining_quantity": remaining_quantity,
+            })
+
+        allocations_by_item = {}
+        for item in return_order.items.all().order_by("id"):
+            source_lines = source_lines_by_product.get(item.product_id, [])
+            allocations = _allocate_quantity_to_source_lines(
+                source_lines,
+                "remaining_quantity",
+                item.quantity,
+            )
+            allocations_by_item[item.id] = [
+                (allocation["order_item"], allocated_quantity)
+                for allocation, allocated_quantity in allocations
+            ]
+            for allocation, allocated_quantity in allocations:
+                allocation["remaining_quantity"] -= allocated_quantity
+
+        return allocations_by_item
+
+    @staticmethod
     @transaction.atomic
     def create_order(supplier, purchase_order, warehouse, items_data, user, reason=None, remark=None):
         policy = get_policy("supply_chain", user=user)
         if not policy.purchase_return_enabled():
             raise ValueError("当前配置未启用采购退货")
+        PurchaseReturnService._require_purchase_order(purchase_order)
+        supplier = PurchaseReturnService._resolve_supplier(supplier, purchase_order)
         PurchaseReturnService.validate_supplier(supplier)
         PurchaseReturnService.validate_products(items_data)
+        PurchaseReturnService._validate_return_quantities(purchase_order, items_data)
         order = PurchaseReturnOrder.objects.create(
-            tenant=(
-                supplier.tenant if supplier else (
-                    purchase_order.tenant if purchase_order else warehouse.tenant
-                )
-            ),
+            tenant=purchase_order.tenant,
             return_no=PurchaseReturnService.generate_no(),
             supplier=supplier,
             supplier_name_snapshot=supplier.supplier_name if supplier else None,
@@ -699,6 +932,13 @@ class PurchaseReturnService:
         order = PurchaseReturnOrder.objects.select_for_update().get(id=order.id)
         if not order.can_transition_to('COMPLETED'):
             raise ValueError("当前状态不允许完成退货")
+        PurchaseReturnService._require_purchase_order(order.purchase_order)
+        PurchaseReturnService._validate_return_quantities(
+            order.purchase_order,
+            [{"product": item.product, "quantity": item.quantity} for item in order.items.all()],
+            exclude_return_order_id=order.id,
+        )
+        source_allocations = PurchaseReturnService.build_purchase_order_item_allocations(order)
 
         # 校验库存充足性
         for item in order.items.all():
@@ -726,14 +966,16 @@ class PurchaseReturnService:
 
         order.status = 'COMPLETED'
         order.completed_at = timezone.now()
-        if order.purchase_order_id and order.supplier_id:
+        if order.supplier_id:
             from business_apps.ap_payable.services import APService
             APService.reverse_ap_for_purchase_return(order, user)
             from business_apps.accounting.services import PostingService
             PostingService.post_purchase_return(order, user)
             order.finance_status = 'ADJUSTED'
-        else:
-            order.finance_status = 'NOT_REQUIRED'
+        for allocations in source_allocations.values():
+            for purchase_order_item, allocated_quantity in allocations:
+                purchase_order_item.returned_quantity += allocated_quantity
+                purchase_order_item.save(update_fields=["returned_quantity"])
         order.save(update_fields=['status', 'completed_at', 'finance_status', 'updated_at'])
         return order
 
@@ -818,6 +1060,8 @@ class InventoryTraceService:
             product_id=product_id,
             created_at__gte=start_date,
         ).select_related('warehouse', 'product', 'operator')
+        if user is not None:
+            qs = apply_erp_tenant_scope(qs, user=user)
 
         if warehouse_id:
             qs = qs.filter(warehouse_id=warehouse_id)

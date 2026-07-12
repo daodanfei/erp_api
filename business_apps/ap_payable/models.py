@@ -164,6 +164,47 @@ class SupplierCreditNote(models.Model):
     def remaining_amount(self):
         return self.amount - self.used_amount
 
+
+class SupplierRefund(models.Model):
+    STATUS_CHOICES = (
+        ('DRAFT', '草稿'),
+        ('APPROVED', '已审核'),
+        ('COMPLETED', '已收款'),
+        ('CANCELLED', '已作废'),
+    )
+    PAYMENT_METHODS = (
+        ('BANK_TRANSFER', '银行转账'),
+        ('WECHAT', '微信支付'),
+        ('ALIPAY', '支付宝'),
+        ('CASH', '现金'),
+        ('OTHER', '其他'),
+    )
+
+    tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='supplier_refunds', null=True, blank=True)
+    refund_no = models.CharField(max_length=50, unique=True, verbose_name="供应商退款单号")
+    supplier = models.ForeignKey(Supplier, on_delete=models.PROTECT, related_name='refunds')
+    credit_note = models.ForeignKey(SupplierCreditNote, on_delete=models.PROTECT, related_name='refunds', verbose_name="对应供应商贷项")
+    refund_amount = models.DecimalField(max_digits=15, decimal_places=2, verbose_name="退款金额")
+    refund_date = models.DateField(verbose_name="退款日期")
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_METHODS, default='BANK_TRANSFER')
+    cash_account = models.ForeignKey('finance.CashAccount', on_delete=models.PROTECT, null=True, blank=True, verbose_name="收款账户")
+    reference_no = models.CharField(max_length=100, null=True, blank=True, verbose_name="交易流水号/支票号")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
+    remark = models.TextField(null=True, blank=True)
+    dept = models.ForeignKey(ERPDepartment, on_delete=models.SET_NULL, null=True, blank=True)
+    created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_supplier_refunds')
+    approved_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_supplier_refunds')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    executed_at = models.DateTimeField(null=True, blank=True, verbose_name="执行时间")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_deleted = models.BooleanField(default=False)
+
+    class Meta:
+        verbose_name = "供应商退款单"
+        verbose_name_plural = verbose_name
+        ordering = ['-refund_date', '-created_at']
+
 class APOperationLog(models.Model):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='ap_operation_logs', null=True, blank=True)
     ap_account = models.ForeignKey(APAccount, on_delete=models.CASCADE, null=True, blank=True, related_name='logs')

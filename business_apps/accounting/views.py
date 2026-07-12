@@ -3,7 +3,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
-from core_apps.common.viewsets import ModuleAwareModelViewSet, ModuleAwareReadOnlyViewSet
+from core_apps.common.viewsets import (
+    ModuleAwareModelViewSet,
+    ModuleAwareReadOnlyViewSet,
+    validate_erp_related_tenant_scope,
+)
 from core_apps.common.permissions import ERPActionPermission
 from core_apps.policies.registry import get_policy
 
@@ -43,6 +47,7 @@ class AccountSubjectViewSet(ModuleAwareModelViewSet):
         policy = get_policy("accounting", user=self.request.user)
         if not policy.subject_editable_after_init() and self.get_queryset().exists():
             raise ValidationError("当前配置不允许在科目初始化后修改会计科目")
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
 
     def perform_destroy(self, instance):

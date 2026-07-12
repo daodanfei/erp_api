@@ -11,7 +11,8 @@ from business_apps.sales.models import SalesOrder, SalesOrderItem
 from business_apps.supplier.models import Supplier
 from core_apps.authentication.models import User
 from core_apps.blueprints.models import SystemBlueprint, SystemBlueprintVersion, SystemInstance
-from core_apps.erp_auth.models import ERPUser
+from core_apps.erp_auth.models import ERPRole, ERPUser
+from core_apps.erp_auth.services import ERPUserProvisionService
 
 from .models import Tenant, TenantConfigSnapshot, TenantModuleState, TenantUser
 from .services import TenantService, build_runtime_config, generate_tenant_code
@@ -166,6 +167,27 @@ class TenantServiceTest(TestCase):
         TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=custom_version)
 
         self.assertTrue(Warehouse.objects.filter(tenant=self.tenant, warehouse_code="W001", status=True).exists())
+
+    def test_apply_blueprint_version_refreshes_existing_super_admin_role_permissions(self):
+        ERPUserProvisionService.ensure_tenant_super_admin(tenant=self.tenant)
+        limited_role = ERPRole.objects.get(tenant=self.tenant, is_system=True)
+        limited_codes = set(limited_role.permissions.values_list("code", flat=True))
+        self.assertIn("inventory", limited_codes)
+        self.assertNotIn("sales", limited_codes)
+
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=self.version_v2)
+
+        limited_role.refresh_from_db()
+        refreshed_codes = set(limited_role.permissions.values_list("code", flat=True))
+        self.assertIn("sales", refreshed_codes)
+        self.assertNotIn("inventory", refreshed_codes)
+
+    def test_apply_blueprint_version_does_not_create_super_admin_when_absent(self):
+        self.assertEqual(self.tenant.erp_users.count(), 0)
+
+        TenantService.apply_blueprint_version(tenant=self.tenant, blueprint_version=self.version_v1)
+
+        self.assertEqual(self.tenant.erp_users.count(), 0)
 
     def test_apply_blueprint_version_blocks_switch_to_multi_warehouse_when_open_items_have_no_warehouse(self):
         category = ProductCategory.objects.create(name="默认分类", status=True, tenant=self.tenant)

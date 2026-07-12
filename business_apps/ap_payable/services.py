@@ -2,7 +2,7 @@ from decimal import Decimal
 from django.db import transaction, models
 from django.utils import timezone
 from django.db.models import Sum, Count, F, Q
-from .models import APAccount, APPayment, APAllocation, APOperationLog, SupplierCreditNote
+from .models import APAccount, APAllocation, APPayment, APOperationLog, SupplierCreditNote, SupplierRefund
 from business_apps.platform.services import CodeRuleService
 from business_apps.purchase.models import PurchaseReceipt
 from business_apps.supplier.services import SupplierSettlementService
@@ -32,6 +32,10 @@ class APService:
         return CodeRuleService.generate('AP_ACCOUNT')
 
     @staticmethod
+    def generate_supplier_refund_no():
+        return CodeRuleService.generate('AP_PAYMENT')
+
+    @staticmethod
     def _update_ap_status(ap_account):
         if ap_account.paid_amount >= ap_account.total_amount:
             ap_account.status = 'PAID'
@@ -39,6 +43,71 @@ class APService:
             ap_account.status = 'PARTIAL'
         else:
             ap_account.status = 'PENDING'
+
+    @staticmethod
+    def _sync_pending_supplier_refunds(credit_note):
+        pending_refunds = SupplierRefund.objects.filter(
+            credit_note=credit_note,
+            status='DRAFT',
+            is_deleted=False,
+        ).order_by('id')
+        remaining_amount = credit_note.remaining_amount
+        for refund in pending_refunds:
+            if remaining_amount <= 0:
+                refund.status = 'CANCELLED'
+                refund.save(update_fields=['status', 'updated_at'])
+                continue
+            if refund.refund_amount != remaining_amount:
+                refund.refund_amount = remaining_amount
+                refund.save(update_fields=['refund_amount', 'updated_at'])
+
+    @staticmethod
+    @transaction.atomic
+    def apply_open_credit_notes(ap_account, operator):
+        remaining_balance = Decimal(str(ap_account.total_amount)) - Decimal(str(ap_account.paid_amount))
+        if remaining_balance <= 0:
+            APService._update_ap_status(ap_account)
+            ap_account.save(update_fields=['status', 'updated_at'])
+            return Decimal('0')
+
+        applied_amount = Decimal('0')
+        credit_notes = (
+            SupplierCreditNote.objects.select_for_update()
+            .filter(tenant=ap_account.tenant, supplier=ap_account.supplier)
+            .exclude(status='CANCELLED')
+            .order_by('note_date', 'id')
+        )
+        for credit_note in credit_notes:
+            available_credit = credit_note.remaining_amount
+            if available_credit <= 0 or remaining_balance <= 0:
+                continue
+
+            offset_amount = min(available_credit, remaining_balance)
+            credit_note.used_amount += offset_amount
+            if credit_note.used_amount >= credit_note.amount:
+                credit_note.status = 'USED'
+            elif credit_note.used_amount > 0:
+                credit_note.status = 'PARTIAL_USED'
+            else:
+                credit_note.status = 'OPEN'
+            credit_note.save(update_fields=['used_amount', 'status'])
+            APService._sync_pending_supplier_refunds(credit_note)
+
+            ap_account.total_amount -= offset_amount
+            remaining_balance -= offset_amount
+            applied_amount += offset_amount
+
+            APOperationLog.objects.create(
+                tenant=ap_account.tenant,
+                ap_account=ap_account,
+                action="供应商贷项抵扣",
+                after_value=f"贷项单: {credit_note.credit_note_no}, 抵扣金额: {offset_amount}",
+                **build_erp_user_fk_kwargs(APOperationLog, user=operator, field_names=("operator",)),
+            )
+
+        APService._update_ap_status(ap_account)
+        ap_account.save(update_fields=['total_amount', 'status', 'updated_at'])
+        return applied_amount
 
     @staticmethod
     @transaction.atomic
@@ -80,12 +149,16 @@ class APService:
             status='PENDING',
             **build_erp_user_and_dept_kwargs(APAccount, user=operator),
         )
+        applied_credit_amount = APService.apply_open_credit_notes(ap, operator)
         
         APOperationLog.objects.create(
             tenant=ap.tenant,
             ap_account=ap,
             action="自动生成应付",
-            after_value=f"金额: {total_amt}, 来源: {receipt.receipt_no}",
+            after_value=(
+                f"原始金额: {total_amt}, 贷项抵扣: {applied_credit_amount}, "
+                f"应付余额: {ap.total_amount}, 来源: {receipt.receipt_no}"
+            ),
             **build_erp_user_fk_kwargs(APOperationLog, user=operator, field_names=("operator",)),
         )
         return ap
@@ -282,14 +355,17 @@ class APService:
         if not return_order.purchase_order_id or not return_order.supplier_id:
             raise ValueError("采购退货单未关联采购订单或供应商，无法执行应付反向调整")
 
+        from business_apps.supply_chain.services import PurchaseReturnService
+
         amount = Decimal('0')
-        purchase_items_by_product = {}
-        for purchase_item in return_order.purchase_order.items.all():
-            purchase_items_by_product.setdefault(purchase_item.product_id, purchase_item)
+        allocations_by_item = PurchaseReturnService.build_purchase_order_item_allocations(return_order)
         for item in return_order.items.all():
-            purchase_item = purchase_items_by_product.get(item.product_id)
-            unit_price = purchase_item.unit_price if purchase_item else (item.product.cost_price or Decimal('0'))
-            amount += Decimal(str(item.quantity)) * Decimal(str(unit_price))
+            allocations = allocations_by_item.get(item.id, [])
+            if allocations:
+                for purchase_item, allocated_quantity in allocations:
+                    amount += Decimal(str(allocated_quantity)) * Decimal(str(purchase_item.unit_price))
+            else:
+                amount += Decimal(str(item.quantity)) * Decimal(str(item.product.cost_price or Decimal('0')))
 
         if amount <= 0:
             raise ValueError("采购退货单金额必须大于0")
@@ -354,8 +430,100 @@ class APService:
                 after_value=f"贷项单: {credit_note.credit_note_no}, 金额: {remaining}",
                 **build_erp_user_fk_kwargs(APOperationLog, user=operator, field_names=("operator",)),
             )
+            APService.create_supplier_refund(
+                supplier=return_order.supplier,
+                credit_note=credit_note,
+                refund_date=timezone.now().date(),
+                operator=operator,
+                remark=f"采购退货自动生成供应商退款单: {return_order.return_no}",
+            )
 
         return amount
+
+    @staticmethod
+    @transaction.atomic
+    def create_supplier_refund(supplier, credit_note, refund_date, operator, payment_method='BANK_TRANSFER', cash_account=None, reference_no=None, remark=None):
+        if credit_note.supplier_id != supplier.id:
+            raise ValueError("供应商退款单与供应商贷项不一致")
+        if credit_note.remaining_amount <= 0:
+            raise ValueError("该供应商贷项已无可退款金额")
+        refund = SupplierRefund.objects.create(
+            tenant=supplier.tenant,
+            refund_no=APService.generate_supplier_refund_no(),
+            supplier=supplier,
+            credit_note=credit_note,
+            refund_amount=credit_note.remaining_amount,
+            refund_date=refund_date,
+            payment_method=payment_method,
+            cash_account=cash_account,
+            reference_no=reference_no,
+            status='DRAFT',
+            remark=remark,
+            **build_erp_user_and_dept_kwargs(SupplierRefund, user=operator),
+        )
+        return refund
+
+    @staticmethod
+    @transaction.atomic
+    def approve_supplier_refund(refund, operator):
+        refund = SupplierRefund.objects.select_for_update().get(id=refund.id)
+        if refund.status != 'DRAFT':
+            raise ValueError("只有草稿状态的供应商退款单可以审核")
+        refund.status = 'APPROVED'
+        refund.approved_by = build_erp_user_fk_kwargs(
+            SupplierRefund,
+            user=operator,
+            field_names=("approved_by",),
+        ).get("approved_by")
+        refund.approved_at = timezone.now()
+        refund.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
+        return refund
+
+    @staticmethod
+    @transaction.atomic
+    def execute_supplier_refund(refund, operator):
+        refund = SupplierRefund.objects.select_for_update().get(id=refund.id)
+        if refund.status != 'APPROVED':
+            raise ValueError("只有已审核状态的供应商退款单可以执行")
+        if refund.executed_at:
+            raise ValueError("供应商退款单已执行")
+
+        credit_note = SupplierCreditNote.objects.select_for_update().get(id=refund.credit_note_id)
+        if credit_note.remaining_amount < refund.refund_amount:
+            raise ValueError("退款金额超过供应商贷项可退款余额")
+
+        if refund.cash_account:
+            from business_apps.finance.models import CashAccount, CashAccountTransaction
+            acc = CashAccount.objects.select_for_update().get(id=refund.cash_account_id)
+            CashAccountTransaction.record_change(
+                cash_account=acc,
+                direction='INFLOW',
+                amount=refund.refund_amount,
+                source_type='AP_SUPPLIER_REFUND',
+                source_id=refund.id,
+                source_document_no_snapshot=refund.refund_no,
+                transaction_date=refund.refund_date,
+                operator=operator,
+                remark=refund.remark,
+            )
+
+        credit_note.used_amount += refund.refund_amount
+        if credit_note.used_amount >= credit_note.amount:
+            credit_note.status = 'USED'
+        elif credit_note.used_amount > 0:
+            credit_note.status = 'PARTIAL_USED'
+        else:
+            credit_note.status = 'OPEN'
+        credit_note.save(update_fields=['used_amount', 'status'])
+        APService._sync_pending_supplier_refunds(credit_note)
+
+        refund.status = 'COMPLETED'
+        refund.executed_at = timezone.now()
+        refund.save(update_fields=['status', 'executed_at', 'updated_at'])
+
+        from business_apps.accounting.services import PostingService
+        PostingService.post_supplier_refund_execution(refund, operator)
+        return refund
 
     @staticmethod
     def get_statistics(user=None, start_date=None, end_date=None):

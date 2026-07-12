@@ -2,7 +2,11 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from core_apps.common.permissions import ERPActionPermission
-from core_apps.common.viewsets import ModuleAwareModelViewSet
+from core_apps.common.viewsets import (
+    ModuleAwareModelViewSet,
+    build_erp_tenant_save_kwargs,
+    validate_erp_related_tenant_scope,
+)
 from core_apps.erp_auth.compat import build_erp_user_fk_kwargs
 from core_apps.policies.registry import get_policy
 from .models import CashAccount, FinanceExportTask
@@ -89,7 +93,8 @@ class CashAccountViewSet(ModuleAwareModelViewSet):
         if not policy.multi_cash_account_enabled() and self.get_queryset().filter(status=True).exists():
             from rest_framework.exceptions import ValidationError
             raise ValidationError("当前配置仅允许单资金账户")
-        serializer.save()
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
+        serializer.save(**build_erp_tenant_save_kwargs(self.queryset.model, user=self.request.user))
 
     def perform_update(self, serializer):
         policy = get_policy("finance", user=self.request.user)
@@ -104,6 +109,7 @@ class CashAccountViewSet(ModuleAwareModelViewSet):
         ):
             from rest_framework.exceptions import ValidationError
             raise ValidationError("当前配置不允许修改已启用账户的期初信息")
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
 
     @action(detail=True, methods=['get'])

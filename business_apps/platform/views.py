@@ -12,7 +12,7 @@ from django.db.models import Q
 
 from core_apps.common.permissions import ERPActionPermission
 from core_apps.common.authz import has_erp_full_data_scope, has_erp_role_permission
-from core_apps.common.viewsets import BaseBusinessViewSet
+from core_apps.common.viewsets import BaseBusinessViewSet, apply_erp_tenant_scope, validate_erp_related_tenant_scope
 from .models import File, DictType, DictItem, CodeRule
 from .serializers import (
     FileSerializer, FileListSerializer,
@@ -170,7 +170,11 @@ class FileViewSet(PlatformFeatureGuardMixin, BaseBusinessViewSet):
         if not all([module, business_type, business_id]):
             return Response({'detail': '缺少参数'}, status=status.HTTP_400_BAD_REQUEST)
 
-        files = FileService.get_business_files(module, business_type, int(business_id))
+        files = self.get_queryset().filter(
+            module=module,
+            business_type=business_type,
+            business_id=int(business_id),
+        )
         serializer = FileListSerializer(files, many=True)
         return Response(serializer.data)
 
@@ -198,6 +202,7 @@ class DictTypeViewSet(PlatformFeatureGuardMixin, BaseBusinessViewSet):
         return DictTypeSerializer
 
     def perform_create(self, serializer):
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(created_by=self.request.user)
         DictionaryService.clear_cache(serializer.instance.dict_code)
         _log_operation(self.request.user, 'CREATE', 'DictType', serializer.instance.id,
@@ -205,6 +210,7 @@ class DictTypeViewSet(PlatformFeatureGuardMixin, BaseBusinessViewSet):
 
     def perform_update(self, serializer):
         old_data = DictTypeSerializer(serializer.instance).data
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
         DictionaryService.clear_cache(serializer.instance.dict_code)
         _log_operation(self.request.user, 'UPDATE', 'DictType', serializer.instance.id,
@@ -239,6 +245,7 @@ class DictItemViewSet(PlatformFeatureGuardMixin, BaseBusinessViewSet):
         return queryset
 
     def perform_create(self, serializer):
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
         DictionaryService.clear_cache(serializer.instance.dict_type.dict_code)
         _log_operation(self.request.user, 'CREATE', 'DictItem', serializer.instance.id,
@@ -246,6 +253,7 @@ class DictItemViewSet(PlatformFeatureGuardMixin, BaseBusinessViewSet):
 
     def perform_update(self, serializer):
         old_data = DictItemSerializer(serializer.instance).data
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
         DictionaryService.clear_cache(serializer.instance.dict_type.dict_code)
         _log_operation(self.request.user, 'UPDATE', 'DictItem', serializer.instance.id,
@@ -262,10 +270,26 @@ class DictItemsByCodeView(PlatformFeatureGuardMixin, APIView):
     """根据字典编码获取字典项（供前端下拉框使用）"""
     feature_key = "dict_center"
     feature_error_message = "当前配置未启用字典中心"
-    permission_classes = [IsAuthenticated]
+    permission_classes = [ERPActionPermission]
+    permission_map = {
+        'get': 'platform:dict:view',
+    }
 
     def get(self, request, dict_code):
-        items = DictionaryService.get_items(dict_code)
+        dict_type = apply_erp_tenant_scope(DictType.objects.all(), user=request.user).filter(dict_code=dict_code).first()
+        if dict_type is None:
+            return Response([], status=status.HTTP_200_OK)
+        items = list(
+            dict_type.items.filter(status='ACTIVE').order_by('sort', 'id').values(
+                'id',
+                'item_code',
+                'item_name',
+                'item_value',
+                'color',
+                'sort',
+                'status',
+            )
+        )
         return Response(items)
 
 
@@ -288,12 +312,14 @@ class CodeRuleViewSet(PlatformFeatureGuardMixin, BaseBusinessViewSet):
     filterset_class = CodeRuleFilter
 
     def perform_create(self, serializer):
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save(created_by=self.request.user)
         _log_operation(self.request.user, 'CREATE', 'CodeRule', serializer.instance.id,
                        after=serializer.data)
 
     def perform_update(self, serializer):
         old_data = CodeRuleSerializer(serializer.instance).data
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
         _log_operation(self.request.user, 'UPDATE', 'CodeRule', serializer.instance.id,
                        before=old_data, after=CodeRuleSerializer(serializer.instance).data)

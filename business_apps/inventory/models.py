@@ -232,6 +232,8 @@ class Stocktake(models.Model):
     STATUS_CHOICES = (
         ('DRAFT', '草稿'),
         ('IN_PROGRESS', '盘点中'),
+        ('PENDING_APPROVAL', '待审核'),
+        ('APPROVED', '已审核'),
         ('COMPLETED', '已完成'),
         ('CANCELLED', '已取消'),
     )
@@ -241,6 +243,10 @@ class Stocktake(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT', verbose_name="状态")
     
     created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_stocktakes', verbose_name="创建人")
+    submitted_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='submitted_stocktakes', verbose_name="提交人")
+    submitted_at = models.DateTimeField(null=True, blank=True, verbose_name="提交时间")
+    approved_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_stocktakes', verbose_name="审核人")
+    approved_at = models.DateTimeField(null=True, blank=True, verbose_name="审核时间")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     completed_at = models.DateTimeField(null=True, blank=True, verbose_name="完成时间")
     is_deleted = models.BooleanField(default=False, verbose_name="是否删除")

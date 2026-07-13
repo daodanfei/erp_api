@@ -36,7 +36,7 @@ class SalesReturnOrderFilter(django_filters.FilterSet):
 
     class Meta:
         model = SalesReturnOrder
-        fields = ['status', 'warehouse', 'customer']
+        fields = ['status', 'warehouse', 'customer', 'sales_order']
 
     def filter_search(self, queryset, name, value):
         return queryset.filter(
@@ -51,7 +51,7 @@ class PurchaseReturnOrderFilter(django_filters.FilterSet):
 
     class Meta:
         model = PurchaseReturnOrder
-        fields = ['status', 'warehouse', 'supplier']
+        fields = ['status', 'warehouse', 'supplier', 'purchase_order']
 
     def filter_search(self, queryset, name, value):
         return queryset.filter(

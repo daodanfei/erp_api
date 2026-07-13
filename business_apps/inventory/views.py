@@ -349,6 +349,8 @@ class StocktakeViewSet(ModuleAwareModelViewSet):
 
     def get_queryset(self):
         queryset = self.get_tenant_scoped_queryset()
+        if self.get_data_permission_type(queryset) != "BUSINESS":
+            return self.apply_data_permission_scope(queryset)
         user = self.request.user
         scope_q = get_data_scope_filter(user, dept_field=self.dept_field, user_field=self.user_field)
         if not scope_q.children:

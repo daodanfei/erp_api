@@ -2,7 +2,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
-from .models import ERPDepartment, ERPPermission, ERPRole, ERPUser
+from .models import ERPDataSpecialGrant, ERPDepartment, ERPPermission, ERPRole, ERPUser
 from .services import ERPUserProvisionService, generate_erp_role_code, get_enabled_erp_permission_codes
 from .tokens import ERPRefreshToken
 
@@ -100,6 +100,12 @@ class ERPRoleSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("包含当前租户未启用的权限")
         return permission_ids
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is not None and self.instance.is_system:
+            raise serializers.ValidationError("租户超级管理员角色由系统维护，不能手工修改")
+        return attrs
+
     def create(self, validated_data):
         tenant = self.context["request"].user.tenant
         permission_ids = validated_data.pop("permission_ids", [])
@@ -123,6 +129,56 @@ class ERPRoleSerializer(serializers.ModelSerializer):
         return instance
 
 
+class ERPDataSpecialGrantSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source="user.name", read_only=True)
+    role_name = serializers.CharField(source="role.name", read_only=True)
+    department_name = serializers.CharField(source="department.name", read_only=True)
+
+    class Meta:
+        model = ERPDataSpecialGrant
+        fields = (
+            "id", "resource_code", "object_id", "user", "role", "department",
+            "user_name", "role_name", "department_name",
+        )
+        read_only_fields = ("id",)
+
+    def validate(self, attrs):
+        from .data_permissions import RESOURCE_BY_CODE, SPECIAL, get_special_options, resolve_permission_type
+
+        request = self.context["request"]
+        tenant = request.user.tenant
+        subjects = [attrs.get("user"), attrs.get("role"), attrs.get("department")]
+        if sum(subject is not None for subject in subjects) != 1:
+            raise serializers.ValidationError("用户、角色、部门必须且只能选择一个")
+        for field in ("user", "role", "department"):
+            subject = attrs.get(field)
+            if subject is not None and subject.tenant_id != tenant.id:
+                raise serializers.ValidationError({field: "授权对象不属于当前租户"})
+        resource_code = attrs["resource_code"]
+        definition = RESOURCE_BY_CODE.get(resource_code)
+        if definition is None:
+            raise serializers.ValidationError({"resource_code": "未知的数据资源"})
+        if resolve_permission_type(user=request.user, resource_code=resource_code, default_type=definition.default_type) != SPECIAL:
+            raise serializers.ValidationError({"resource_code": "只有特殊数据可以单独授权"})
+        valid_ids = {item["id"] for item in get_special_options(definition, tenant=tenant)}
+        if attrs["object_id"] not in valid_ids:
+            raise serializers.ValidationError({"object_id": "授权数据不存在或不属于当前租户"})
+        duplicate_filter = {
+            "tenant": tenant,
+            "resource_code": resource_code,
+            "object_id": attrs["object_id"],
+            "user": attrs.get("user"),
+            "role": attrs.get("role"),
+            "department": attrs.get("department"),
+        }
+        if ERPDataSpecialGrant.objects.filter(**duplicate_filter).exists():
+            raise serializers.ValidationError("该数据已经授权给此对象")
+        return attrs
+
+    def create(self, validated_data):
+        return ERPDataSpecialGrant.objects.create(tenant=self.context["request"].user.tenant, **validated_data)
+
+
 class ERPUserSerializer(serializers.ModelSerializer):
     tenant_name = serializers.CharField(source="tenant.name", read_only=True)
     dept_name = serializers.CharField(source="dept.name", read_only=True)
@@ -142,7 +198,6 @@ class ERPUserSerializer(serializers.ModelSerializer):
             "phone",
             "email",
             "status",
-            "is_super_admin",
             "must_change_password",
             "last_login_at",
             "role_names",
@@ -176,7 +231,6 @@ class ERPUserWriteSerializer(serializers.ModelSerializer):
             "phone",
             "email",
             "status",
-            "is_super_admin",
             "password",
             "role_ids",
         )
@@ -233,10 +287,14 @@ class ERPUserWriteSerializer(serializers.ModelSerializer):
             must_change_password=True,
             **validated_data,
         )
-        if user.is_super_admin:
-            ERPUserProvisionService.ensure_super_admin_role(user=user)
-        elif role_ids:
+        if role_ids:
             user.roles.set(ERPRole.objects.filter(tenant=tenant, id__in=role_ids))
+        else:
+            from core_apps.tenant.services import TenantService
+
+            runtime_config = TenantService.get_runtime_config(tenant)
+            if not runtime_config.is_feature_enabled("system", "role_management", default=True):
+                ERPUserProvisionService.ensure_super_admin_role(user=user)
         return user
 
     def update(self, instance, validated_data):
@@ -252,9 +310,7 @@ class ERPUserWriteSerializer(serializers.ModelSerializer):
             update_fields.extend(["password", "must_change_password"])
         if update_fields:
             instance.save(update_fields=update_fields)
-        if instance.is_super_admin:
-            ERPUserProvisionService.ensure_super_admin_role(user=instance)
-        elif role_ids is not None:
+        if role_ids is not None:
             instance.roles.set(ERPRole.objects.filter(tenant=tenant, id__in=role_ids))
         return instance
 

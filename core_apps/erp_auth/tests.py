@@ -415,7 +415,7 @@ class ERPUserProvisionServiceTest(TestCase):
         self.assertEqual(ERPUser.objects.filter(tenant=self.tenant).count(), 1)
         self.assertEqual(ERPRole.objects.filter(tenant=self.tenant).count(), 1)
         self.assertTrue(first.user.check_password(first.initial_password))
-        self.assertTrue(first.user.is_super_admin)
+        self.assertTrue(first.user.roles.filter(is_system=True, data_scope="ALL", status=True).exists())
         self.assertTrue(first.user.must_change_password)
         granted_codes = set(first.role.permissions.values_list("code", flat=True))
         self.assertTrue({"system", "system:user", "user:create", "inventory", "inventory:product:view"}.issubset(granted_codes))
@@ -844,7 +844,6 @@ class ERPUserManagementApiTest(APITestCase):
                 "name": "操作员",
                 "password": "operator-123",
                 "status": True,
-                "is_super_admin": False,
                 "role_ids": [self.staff_role.id],
             },
             format="json",
@@ -862,7 +861,6 @@ class ERPUserManagementApiTest(APITestCase):
                 "name": "操作员2",
                 "password": "operator2-123",
                 "status": True,
-                "is_super_admin": False,
             },
             format="json",
         )
@@ -870,11 +868,12 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertEqual(limit_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("租户用户数已达上限", str(limit_response.data))
 
-    def test_create_super_admin_user_auto_assigns_super_admin_role(self):
+    def test_create_user_can_assign_super_admin_role(self):
         self.tenant.user_limit = 3
         self.tenant.save(update_fields=["user_limit"])
         self.login()
 
+        super_admin_role = self.erp_user.roles.get(is_system=True, data_scope="ALL")
         response = self.client.post(
             "/api/erp-auth/users/",
             {
@@ -882,7 +881,7 @@ class ERPUserManagementApiTest(APITestCase):
                 "name": "租户管理员2",
                 "password": "tenant-admin-123",
                 "status": True,
-                "is_super_admin": True,
+                "role_ids": [super_admin_role.id],
             },
             format="json",
         )
@@ -892,7 +891,6 @@ class ERPUserManagementApiTest(APITestCase):
             tenant=self.tenant,
             username="tenant_admin_2",
         )
-        self.assertTrue(created_user.is_super_admin)
         self.assertTrue(created_user.roles.exists())
         role = created_user.roles.first()
         self.assertEqual(role.name, "租户超级管理员")

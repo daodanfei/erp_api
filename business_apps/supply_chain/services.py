@@ -726,14 +726,64 @@ class SalesReturnService:
 
     @staticmethod
     @transaction.atomic
+    def submit_order(order, user):
+        policy = get_policy("supply_chain", user=user)
+        if order.status != 'DRAFT':
+            raise ValueError("只有草稿状态的销售退货单可以提交审核")
+        if order.items.count() == 0:
+            raise ValueError("销售退货单明细不能为空")
+        SalesReturnService._require_sales_order(order.sales_order)
+        SalesReturnService.validate_customer(order.customer)
+        SalesReturnService.validate_products(
+            [{"product": item.product, "quantity": item.quantity} for item in order.items.select_related("product").all()]
+        )
+        SalesReturnService._validate_return_quantities(
+            order.sales_order,
+            [{"product": item.product, "quantity": item.quantity} for item in order.items.select_related("product").all()],
+            exclude_return_order_id=order.id,
+        )
+        erp_user_id = get_erp_user_id(user)
+        if policy.return_approval_enabled():
+            order.status = 'PENDING_APPROVAL'
+        else:
+            order.status = 'APPROVED'
+            if erp_user_id is not None:
+                order.approved_by_id = erp_user_id
+            else:
+                order.approved_by = None
+            order.approved_at = timezone.now()
+        if erp_user_id is not None:
+            order.submitted_by_id = erp_user_id
+        else:
+            order.submitted_by = None
+        order.submitted_at = timezone.now()
+        update_fields = ['status', 'submitted_by', 'submitted_at', 'updated_at']
+        if not policy.return_approval_enabled():
+            update_fields.extend(['approved_by', 'approved_at'])
+        order.save(update_fields=update_fields)
+        return order
+
+    @staticmethod
+    @transaction.atomic
     def approve_order(order, user):
         policy = get_policy("supply_chain", user=user)
-        if not order.can_transition_to('APPROVED'):
+        if policy.return_approval_enabled():
+            if order.status != 'PENDING_APPROVAL':
+                raise ValueError("只有待审核状态的销售退货单可以审核")
+        elif not order.can_transition_to('APPROVED'):
             raise ValueError("当前状态不允许审核")
-        if policy.return_approval_enabled() and order.created_by and order.created_by_id == user.id:
+        erp_user_id = get_erp_user_id(user)
+        if order.created_by and erp_user_id is not None and order.created_by_id == erp_user_id:
             raise ValueError("审核人不能是单据创建人")
+        if order.submitted_by and erp_user_id is not None and order.submitted_by_id == erp_user_id:
+            raise ValueError("审核人不能是单据提交人")
         order.status = 'APPROVED'
-        order.save()
+        if erp_user_id is not None:
+            order.approved_by_id = erp_user_id
+        else:
+            order.approved_by = None
+        order.approved_at = timezone.now()
+        order.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
         return order
 
     @staticmethod
@@ -915,14 +965,64 @@ class PurchaseReturnService:
 
     @staticmethod
     @transaction.atomic
+    def submit_order(order, user):
+        policy = get_policy("supply_chain", user=user)
+        if order.status != 'DRAFT':
+            raise ValueError("只有草稿状态的采购退货单可以提交审核")
+        if order.items.count() == 0:
+            raise ValueError("采购退货单明细不能为空")
+        PurchaseReturnService._require_purchase_order(order.purchase_order)
+        PurchaseReturnService.validate_supplier(order.supplier)
+        PurchaseReturnService.validate_products(
+            [{"product": item.product, "quantity": item.quantity} for item in order.items.select_related("product").all()]
+        )
+        PurchaseReturnService._validate_return_quantities(
+            order.purchase_order,
+            [{"product": item.product, "quantity": item.quantity} for item in order.items.select_related("product").all()],
+            exclude_return_order_id=order.id,
+        )
+        erp_user_id = get_erp_user_id(user)
+        if policy.return_approval_enabled():
+            order.status = 'PENDING_APPROVAL'
+        else:
+            order.status = 'APPROVED'
+            if erp_user_id is not None:
+                order.approved_by_id = erp_user_id
+            else:
+                order.approved_by = None
+            order.approved_at = timezone.now()
+        if erp_user_id is not None:
+            order.submitted_by_id = erp_user_id
+        else:
+            order.submitted_by = None
+        order.submitted_at = timezone.now()
+        update_fields = ['status', 'submitted_by', 'submitted_at', 'updated_at']
+        if not policy.return_approval_enabled():
+            update_fields.extend(['approved_by', 'approved_at'])
+        order.save(update_fields=update_fields)
+        return order
+
+    @staticmethod
+    @transaction.atomic
     def approve_order(order, user):
         policy = get_policy("supply_chain", user=user)
-        if not order.can_transition_to('APPROVED'):
+        if policy.return_approval_enabled():
+            if order.status != 'PENDING_APPROVAL':
+                raise ValueError("只有待审核状态的采购退货单可以审核")
+        elif not order.can_transition_to('APPROVED'):
             raise ValueError("当前状态不允许审核")
-        if policy.return_approval_enabled() and order.created_by and order.created_by_id == user.id:
+        erp_user_id = get_erp_user_id(user)
+        if order.created_by and erp_user_id is not None and order.created_by_id == erp_user_id:
             raise ValueError("审核人不能是单据创建人")
+        if order.submitted_by and erp_user_id is not None and order.submitted_by_id == erp_user_id:
+            raise ValueError("审核人不能是单据提交人")
         order.status = 'APPROVED'
-        order.save()
+        if erp_user_id is not None:
+            order.approved_by_id = erp_user_id
+        else:
+            order.approved_by = None
+        order.approved_at = timezone.now()
+        order.save(update_fields=['status', 'approved_by', 'approved_at', 'updated_at'])
         return order
 
     @staticmethod

@@ -146,6 +146,7 @@ class InventorySerializer(WarehouseFieldRuleSerializerMixin, serializers.ModelSe
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_code = serializers.CharField(source='product.product_code', read_only=True)
     available_qty = serializers.ReadOnlyField()
+    sellable_qty = serializers.SerializerMethodField()
     warehouse_field_rule = serializers.SerializerMethodField()
     warehouse_field_rule_key = FIELD_INVENTORY_TRANSACTION_WAREHOUSE
     
@@ -155,6 +156,16 @@ class InventorySerializer(WarehouseFieldRuleSerializerMixin, serializers.ModelSe
 
     def get_warehouse_field_rule(self, obj):
         return self._get_warehouse_field_rule()
+
+    def get_sellable_qty(self, obj):
+        from business_apps.sales.services import SalesOrderService
+
+        committed_qty = SalesOrderService.get_open_sales_commitment_quantity(
+            warehouse=obj.warehouse,
+            product=obj.product,
+        )
+        sellable_qty = obj.current_qty - committed_qty
+        return max(sellable_qty, 0)
 
 class InventoryTransactionSerializer(WarehouseFieldRuleSerializerMixin, serializers.ModelSerializer):
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)

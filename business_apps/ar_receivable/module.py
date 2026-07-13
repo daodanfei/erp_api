@@ -69,6 +69,7 @@ MODULE = ModuleDefinition(
         {"code": "ar:refund:create", "name": "新建退款单", "parent": "ar:refund"},
         {"code": "ar:refund:update", "name": "编辑退款单", "parent": "ar:refund"},
         {"code": "ar:refund:delete", "name": "删除退款单", "parent": "ar:refund"},
+        {"code": "ar:refund:submit", "name": "提交退款单审核", "parent": "ar:refund"},
         {"code": "ar:refund:approve", "name": "审核退款单", "parent": "ar:refund"},
         {"code": "ar:refund:execute", "name": "执行退款单", "parent": "ar:refund"},
     ),

@@ -117,11 +117,16 @@ class SalesReturnOrderSerializer(ActiveWarehouseValidationMixin, serializers.Mod
     customer_name = serializers.CharField(source='customer.customer_name', read_only=True)
     sales_order_no = serializers.CharField(source='sales_order.order_no', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True)
 
     class Meta:
         model = SalesReturnOrder
         fields = '__all__'
-        read_only_fields = ('return_no', 'status', 'finance_status', 'created_by', 'dept', 'completed_at')
+        read_only_fields = (
+            'return_no', 'status', 'finance_status', 'created_by', 'dept', 'completed_at',
+            'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
+        )
 
 
 class SalesReturnOrderListSerializer(serializers.ModelSerializer):
@@ -129,10 +134,17 @@ class SalesReturnOrderListSerializer(serializers.ModelSerializer):
     customer_name_snapshot = serializers.CharField(read_only=True)
     sales_order_no = serializers.CharField(source='sales_order.order_no', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True)
 
     class Meta:
         model = SalesReturnOrder
-        fields = ['id', 'return_no', 'customer', 'customer_name_snapshot', 'sales_order', 'sales_order_no', 'warehouse', 'warehouse_name', 'status', 'finance_status', 'reason', 'created_by', 'created_by_name', 'created_at', 'completed_at']
+        fields = [
+            'id', 'return_no', 'customer', 'customer_name_snapshot', 'sales_order', 'sales_order_no',
+            'warehouse', 'warehouse_name', 'status', 'finance_status', 'reason',
+            'created_by', 'created_by_name', 'submitted_by', 'submitted_by_name',
+            'approved_by', 'approved_by_name', 'created_at', 'completed_at',
+        ]
 
 
 # ==================== 采购退货 ====================
@@ -152,11 +164,16 @@ class PurchaseReturnOrderSerializer(ActiveWarehouseValidationMixin, serializers.
     supplier_name = serializers.CharField(source='supplier.supplier_name', read_only=True)
     purchase_order_no = serializers.CharField(source='purchase_order.purchase_order_no', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True)
 
     class Meta:
         model = PurchaseReturnOrder
         fields = '__all__'
-        read_only_fields = ('return_no', 'status', 'finance_status', 'created_by', 'dept', 'completed_at')
+        read_only_fields = (
+            'return_no', 'status', 'finance_status', 'created_by', 'dept', 'completed_at',
+            'submitted_by', 'submitted_at', 'approved_by', 'approved_at',
+        )
 
 
 class PurchaseReturnOrderListSerializer(serializers.ModelSerializer):
@@ -164,10 +181,17 @@ class PurchaseReturnOrderListSerializer(serializers.ModelSerializer):
     supplier_name_snapshot = serializers.CharField(read_only=True)
     purchase_order_no = serializers.CharField(source='purchase_order.purchase_order_no', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True)
 
     class Meta:
         model = PurchaseReturnOrder
-        fields = ['id', 'return_no', 'supplier', 'supplier_name_snapshot', 'purchase_order', 'purchase_order_no', 'warehouse', 'warehouse_name', 'status', 'finance_status', 'reason', 'created_by', 'created_by_name', 'created_at', 'completed_at']
+        fields = [
+            'id', 'return_no', 'supplier', 'supplier_name_snapshot', 'purchase_order', 'purchase_order_no',
+            'warehouse', 'warehouse_name', 'status', 'finance_status', 'reason',
+            'created_by', 'created_by_name', 'submitted_by', 'submitted_by_name',
+            'approved_by', 'approved_by_name', 'created_at', 'completed_at',
+        ]
 
 
 # ==================== 库存预警 ====================

@@ -465,10 +465,31 @@ class APService:
 
     @staticmethod
     @transaction.atomic
-    def approve_supplier_refund(refund, operator):
+    def submit_supplier_refund(refund, operator):
         refund = SupplierRefund.objects.select_for_update().get(id=refund.id)
         if refund.status != 'DRAFT':
-            raise ValueError("只有草稿状态的供应商退款单可以审核")
+            raise ValueError("只有草稿状态的供应商退款单可以提交审核")
+        refund.status = 'PENDING_APPROVAL'
+        refund.submitted_by = build_erp_user_fk_kwargs(
+            SupplierRefund,
+            user=operator,
+            field_names=("submitted_by",),
+        ).get("submitted_by")
+        refund.submitted_at = timezone.now()
+        refund.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
+        return refund
+
+    @staticmethod
+    @transaction.atomic
+    def approve_supplier_refund(refund, operator):
+        refund = SupplierRefund.objects.select_for_update().get(id=refund.id)
+        if refund.status != 'PENDING_APPROVAL':
+            raise ValueError("只有待审核状态的供应商退款单可以审核")
+        erp_user_id = get_erp_user_id(operator)
+        if erp_user_id is not None and (
+            refund.created_by_id == erp_user_id or refund.submitted_by_id == erp_user_id
+        ):
+            raise ValueError("审核人不能是退款单创建人或提交人")
         refund.status = 'APPROVED'
         refund.approved_by = build_erp_user_fk_kwargs(
             SupplierRefund,
@@ -481,7 +502,16 @@ class APService:
 
     @staticmethod
     @transaction.atomic
-    def execute_supplier_refund(refund, operator):
+    def execute_supplier_refund(
+        refund,
+        operator,
+        *,
+        payment_method=None,
+        cash_account=None,
+        bank_account=None,
+        reference_no=None,
+        remark=None,
+    ):
         refund = SupplierRefund.objects.select_for_update().get(id=refund.id)
         if refund.status != 'APPROVED':
             raise ValueError("只有已审核状态的供应商退款单可以执行")
@@ -491,6 +521,13 @@ class APService:
         credit_note = SupplierCreditNote.objects.select_for_update().get(id=refund.credit_note_id)
         if credit_note.remaining_amount < refund.refund_amount:
             raise ValueError("退款金额超过供应商贷项可退款余额")
+
+        if payment_method:
+            refund.payment_method = payment_method
+        refund.cash_account = cash_account
+        refund.bank_account = bank_account
+        refund.reference_no = reference_no
+        refund.remark = remark
 
         if refund.cash_account:
             from business_apps.finance.models import CashAccount, CashAccountTransaction
@@ -519,7 +556,18 @@ class APService:
 
         refund.status = 'COMPLETED'
         refund.executed_at = timezone.now()
-        refund.save(update_fields=['status', 'executed_at', 'updated_at'])
+        refund.save(
+            update_fields=[
+                'payment_method',
+                'cash_account',
+                'bank_account',
+                'reference_no',
+                'remark',
+                'status',
+                'executed_at',
+                'updated_at',
+            ]
+        )
 
         from business_apps.accounting.services import PostingService
         PostingService.post_supplier_refund_execution(refund, operator)

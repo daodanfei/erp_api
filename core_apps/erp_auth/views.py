@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 
 from core_apps.common.permissions import ERPActionPermission, ERPUserOnly
 
-from .models import ERPDepartment, ERPPermission, ERPRole, ERPUser
+from .models import ERPDataPermissionPolicy, ERPDataSpecialGrant, ERPDepartment, ERPPermission, ERPRole, ERPUser
 from .authentication import ERPJWTAuthentication
 from .serializers import (
     ERPChangePasswordSerializer,
@@ -18,8 +18,10 @@ from .serializers import (
     ERPTokenRefreshSerializer,
     ERPUserSerializer,
     ERPUserWriteSerializer,
+    ERPDataSpecialGrantSerializer,
 )
-from .services import get_enabled_erp_permission_codes
+from .services import ERPUserProvisionService, get_enabled_erp_permission_codes
+from core_apps.common.authz import has_erp_super_admin_role
 from .tokens import ERPRefreshToken
 
 
@@ -108,11 +110,80 @@ class ERPRoleViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
+class ERPDataResourceView(APIView):
+    permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
+    permission_map = {"get": "system:role", "put": "system:role"}
+
+    def get(self, request):
+        from .data_permissions import DATA_RESOURCES, get_special_options, resolve_permission_type, supported_permission_types
+
+        result = []
+        for resource in DATA_RESOURCES:
+            permission_type = resolve_permission_type(
+                user=request.user, resource_code=resource.code, default_type=resource.default_type
+            )
+            result.append({
+                "code": resource.code,
+                "name": resource.name,
+                "module": resource.module,
+                "default_type": resource.default_type,
+                "permission_type": permission_type,
+                "supported_types": supported_permission_types(resource),
+                "special_options": get_special_options(resource, tenant=request.user.tenant) if permission_type == "SPECIAL" else [],
+            })
+        return response.Response(result)
+
+    def put(self, request):
+        from django.db import transaction
+        from .data_permissions import RESOURCE_BY_CODE, VALID_TYPES, supported_permission_types
+
+        items = request.data.get("resources")
+        if not isinstance(items, list):
+            raise ValidationError({"resources": "请提交数据资源配置列表"})
+        seen = set()
+        for item in items:
+            code = item.get("code") if isinstance(item, dict) else None
+            permission_type = item.get("permission_type") if isinstance(item, dict) else None
+            if code not in RESOURCE_BY_CODE or permission_type not in VALID_TYPES:
+                raise ValidationError({"resources": "包含未知资源或权限类型"})
+            if permission_type not in supported_permission_types(RESOURCE_BY_CODE[code]):
+                raise ValidationError({"resources": f"{RESOURCE_BY_CODE[code].name}没有业务归属字段，不能配置为业务数据"})
+            if code in seen:
+                raise ValidationError({"resources": "数据资源不能重复"})
+            seen.add(code)
+        with transaction.atomic():
+            for item in items:
+                ERPDataPermissionPolicy.objects.update_or_create(
+                    tenant=request.user.tenant,
+                    resource_code=item["code"],
+                    defaults={"permission_type": item["permission_type"]},
+                )
+                if item["permission_type"] != "SPECIAL":
+                    ERPDataSpecialGrant.objects.filter(
+                        tenant=request.user.tenant, resource_code=item["code"]
+                    ).delete()
+        return self.get(request)
+
+
+class ERPDataSpecialGrantViewSet(viewsets.ModelViewSet):
+    serializer_class = ERPDataSpecialGrantSerializer
+    permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
+    http_method_names = ["get", "post", "delete", "head", "options"]
+    permission_map = {"list": "system:role", "create": "system:role", "destroy": "system:role"}
+
+    def get_queryset(self):
+        queryset = ERPDataSpecialGrant.objects.filter(tenant=self.request.user.tenant).select_related(
+            "user", "role", "department"
+        )
+        resource_code = self.request.query_params.get("resource_code")
+        return queryset.filter(resource_code=resource_code) if resource_code else queryset
+
+
 class ERPUserViewSet(viewsets.ModelViewSet):
     queryset = ERPUser.objects.select_related("tenant", "dept").prefetch_related("roles").all()
     serializer_class = ERPUserSerializer
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
-    filterset_fields = ["tenant", "status", "is_super_admin", "must_change_password"]
+    filterset_fields = ["tenant", "status", "must_change_password"]
     http_method_names = ["get", "post", "put", "patch", "head", "options"]
     permission_map = {
         "list": "system:user",
@@ -160,6 +231,9 @@ class ERPLoginView(APIView):
         serializer = ERPLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data["user"]
+        if has_erp_super_admin_role(user):
+            # Keep existing tenant administrators aligned with newly released ERP permissions.
+            ERPUserProvisionService.ensure_super_admin_role(user=user)
         refresh = ERPRefreshToken.for_user(user)
         user.last_login_at = timezone.now()
         user.save(update_fields=["last_login_at"])

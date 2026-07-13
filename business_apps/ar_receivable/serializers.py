@@ -59,7 +59,7 @@ class ReceiptSerializer(serializers.ModelSerializer):
         erp_user_id = get_erp_user_id(user)
         if erp_user_id is not None and obj.created_by_id == erp_user_id:
             return False
-        return has_erp_role_permission(user, REFUND_APPROVE_PERMISSION_CODE)
+        return has_erp_role_permission(user, RECEIPT_APPROVE_PERMISSION_CODE)
 
     def get_can_execute(self, obj):
         request = self.context.get('request')
@@ -70,33 +70,46 @@ class ReceiptSerializer(serializers.ModelSerializer):
             return False
         if obj.status not in ['UNWRITTEN', 'PARTIAL_WRITTEN', 'WRITTEN']:
             return False
-        return has_erp_role_permission(user, REFUND_EXECUTE_PERMISSION_CODE)
+        return has_erp_role_permission(user, RECEIPT_EXECUTE_PERMISSION_CODE)
 
 
 class CustomerRefundSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.customer_name', read_only=True)
     receivable_no = serializers.CharField(source='receivable.receivable_no', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    submitted_by_name = serializers.CharField(source='submitted_by.username', read_only=True)
     approved_by_name = serializers.CharField(source='approved_by.username', read_only=True)
+    can_submit = serializers.SerializerMethodField()
     can_approve = serializers.SerializerMethodField()
     can_execute = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomerRefund
         fields = '__all__'
-        read_only_fields = ('refund_no', 'status', 'created_by', 'approved_by', 'approved_at', 'executed_at')
+        read_only_fields = ('refund_no', 'status', 'created_by', 'submitted_by', 'submitted_at', 'approved_by', 'approved_at', 'executed_at')
 
-    def get_can_approve(self, obj):
+    def get_can_submit(self, obj):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
         if not user or not user.is_authenticated:
             return False
         if obj.status != 'DRAFT':
             return False
-        erp_user_id = get_erp_user_id(user)
-        if erp_user_id is not None and obj.created_by_id == erp_user_id:
+        return has_erp_role_permission(user, 'ar:refund:submit')
+
+    def get_can_approve(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
             return False
-        return has_erp_role_permission(user, RECEIPT_APPROVE_PERMISSION_CODE)
+        if obj.status != 'PENDING_APPROVAL':
+            return False
+        erp_user_id = get_erp_user_id(user)
+        if erp_user_id is not None and (
+            obj.created_by_id == erp_user_id or obj.submitted_by_id == erp_user_id
+        ):
+            return False
+        return has_erp_role_permission(user, REFUND_APPROVE_PERMISSION_CODE)
 
     def get_can_execute(self, obj):
         request = self.context.get('request')
@@ -107,4 +120,4 @@ class CustomerRefundSerializer(serializers.ModelSerializer):
             return False
         if obj.status != 'APPROVED':
             return False
-        return has_erp_role_permission(user, RECEIPT_EXECUTE_PERMISSION_CODE)
+        return has_erp_role_permission(user, REFUND_EXECUTE_PERMISSION_CODE)

@@ -177,13 +177,15 @@ class SalesReturnOrder(models.Model):
 
     STATUS_CHOICES = (
         ('DRAFT', '草稿'),
+        ('PENDING_APPROVAL', '待审核'),
         ('APPROVED', '已审核'),
         ('COMPLETED', '已完成'),
         ('CANCELLED', '已取消'),
     )
 
     STATUS_TRANSITIONS = {
-        'DRAFT': ['APPROVED', 'CANCELLED'],
+        'DRAFT': ['PENDING_APPROVAL', 'CANCELLED'],
+        'PENDING_APPROVAL': ['APPROVED', 'CANCELLED'],
         'APPROVED': ['COMPLETED', 'CANCELLED'],
         'COMPLETED': [],
         'CANCELLED': [],
@@ -201,6 +203,10 @@ class SalesReturnOrder(models.Model):
     finance_status = models.CharField(max_length=20, choices=FINANCE_STATUS_CHOICES, default='PENDING', verbose_name="财务处理状态")
     dept = models.ForeignKey(ERPDepartment, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="所属部门")
     created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, verbose_name="创建人")
+    submitted_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='submitted_sales_return_orders', verbose_name="提交人")
+    submitted_at = models.DateTimeField(null=True, blank=True, verbose_name="提交时间")
+    approved_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_sales_return_orders', verbose_name="审核人")
+    approved_at = models.DateTimeField(null=True, blank=True, verbose_name="审核时间")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     completed_at = models.DateTimeField(null=True, blank=True, verbose_name="完成时间")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
@@ -253,13 +259,15 @@ class PurchaseReturnOrder(models.Model):
 
     STATUS_CHOICES = (
         ('DRAFT', '草稿'),
+        ('PENDING_APPROVAL', '待审核'),
         ('APPROVED', '已审核'),
         ('COMPLETED', '已完成'),
         ('CANCELLED', '已取消'),
     )
 
     STATUS_TRANSITIONS = {
-        'DRAFT': ['APPROVED', 'CANCELLED'],
+        'DRAFT': ['PENDING_APPROVAL', 'CANCELLED'],
+        'PENDING_APPROVAL': ['APPROVED', 'CANCELLED'],
         'APPROVED': ['COMPLETED', 'CANCELLED'],
         'COMPLETED': [],
         'CANCELLED': [],
@@ -277,6 +285,10 @@ class PurchaseReturnOrder(models.Model):
     finance_status = models.CharField(max_length=20, choices=FINANCE_STATUS_CHOICES, default='PENDING', verbose_name="财务处理状态")
     dept = models.ForeignKey(ERPDepartment, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="所属部门")
     created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, verbose_name="创建人")
+    submitted_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='submitted_purchase_return_orders', verbose_name="提交人")
+    submitted_at = models.DateTimeField(null=True, blank=True, verbose_name="提交时间")
+    approved_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_purchase_return_orders', verbose_name="审核人")
+    approved_at = models.DateTimeField(null=True, blank=True, verbose_name="审核时间")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     completed_at = models.DateTimeField(null=True, blank=True, verbose_name="完成时间")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")

@@ -2,6 +2,7 @@ from django.db.models import Q
 from core_apps.authentication.models import User as PlatformUser
 from core_apps.common.authz import has_erp_full_data_scope, has_platform_full_data_scope
 from core_apps.erp_auth.models import ERPUser
+from core_apps.erp_auth.data_permissions import get_department_descendant_ids
 
 def get_data_scope_filter(user, dept_field='dept', user_field='created_by'):
     """
@@ -30,9 +31,9 @@ def get_data_scope_filter(user, dept_field='dept', user_field='created_by'):
     if 'DEPARTMENT' in scopes:
         user_dept = getattr(user, "dept", None)
         if user_dept:
-            q_filter |= Q(**{dept_field: user.dept})
+            q_filter |= Q(**{f"{dept_field}__in": get_department_descendant_ids(user_dept)})
         else:
-            # ERP users have no department model; fall back to self scope.
+            # A user without a department can only retain self visibility.
             q_filter |= Q(**{user_field: user})
             
     if 'SELF' in scopes:

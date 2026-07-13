@@ -36,3 +36,9 @@ def has_erp_full_data_scope(user: ERPUser) -> bool:
     if not isinstance(user, ERPUser) or not user.is_authenticated:
         return False
     return user.roles.filter(status=True, data_scope="ALL").exists()
+
+
+def has_erp_super_admin_role(user: ERPUser) -> bool:
+    if not isinstance(user, ERPUser) or not user.is_authenticated:
+        return False
+    return user.roles.filter(status=True, is_system=True, data_scope="ALL").exists()

@@ -269,6 +269,7 @@ class SalesReturnOrderViewSet(BaseBusinessViewSet):
         'update': 'supply_chain:sales_return:update',
         'partial_update': 'supply_chain:sales_return:update',
         'destroy': 'supply_chain:sales_return:delete',
+        'submit': 'supply_chain:sales_return:submit',
         'approve': 'supply_chain:sales_return:approve',
         'complete': 'supply_chain:sales_return:complete',
         'cancel': 'supply_chain:sales_return:cancel',
@@ -310,6 +311,15 @@ class SalesReturnOrderViewSet(BaseBusinessViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except ObjectDoesNotExist:
             return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        order = self.get_object()
+        try:
+            order = SalesReturnService.submit_order(order, request.user)
+            return Response({'status': order.status.lower()})
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -356,6 +366,7 @@ class PurchaseReturnOrderViewSet(BaseBusinessViewSet):
         'update': 'supply_chain:purchase_return:update',
         'partial_update': 'supply_chain:purchase_return:update',
         'destroy': 'supply_chain:purchase_return:delete',
+        'submit': 'supply_chain:purchase_return:submit',
         'approve': 'supply_chain:purchase_return:approve',
         'complete': 'supply_chain:purchase_return:complete',
         'cancel': 'supply_chain:purchase_return:cancel',
@@ -397,6 +408,15 @@ class PurchaseReturnOrderViewSet(BaseBusinessViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except ObjectDoesNotExist:
             return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        order = self.get_object()
+        try:
+            order = PurchaseReturnService.submit_order(order, request.user)
+            return Response({'status': order.status.lower()})
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

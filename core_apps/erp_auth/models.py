@@ -72,7 +72,7 @@ class ERPRole(models.Model):
     SCOPE_CHOICES = (
         ("ALL", "全部数据"),
         ("SELF", "仅本人数据"),
-        ("DEPARTMENT", "本部门数据"),
+        ("DEPARTMENT", "本部门及下级部门数据"),
     )
 
     tenant = models.ForeignKey(
@@ -116,8 +116,10 @@ class ERPUserManager(BaseUserManager):
 
     def create_superuser(self, tenant, username: str, password: str | None = None, **extra_fields):
         extra_fields.setdefault("status", True)
-        extra_fields.setdefault("is_super_admin", True)
-        return self.create_user(tenant=tenant, username=username, password=password, **extra_fields)
+        user = self.create_user(tenant=tenant, username=username, password=password, **extra_fields)
+        from .services import ERPUserProvisionService
+        ERPUserProvisionService.ensure_super_admin_role(user=user)
+        return user
 
 
 class ERPUser(AbstractBaseUser):
@@ -140,7 +142,6 @@ class ERPUser(AbstractBaseUser):
     phone = models.CharField(max_length=20, blank=True, verbose_name="手机号")
     email = models.EmailField(blank=True, verbose_name="邮箱")
     status = models.BooleanField(default=True, verbose_name="用户状态")
-    is_super_admin = models.BooleanField(default=False, verbose_name="是否租户超级管理员")
     must_change_password = models.BooleanField(default=True, verbose_name="是否首次改密")
     last_login_at = models.DateTimeField(null=True, blank=True, verbose_name="最近登录时间")
     roles = models.ManyToManyField(ERPRole, blank=True, related_name="users", verbose_name="拥有角色")
@@ -163,3 +164,51 @@ class ERPUser(AbstractBaseUser):
 
     def __str__(self):
         return f"{self.tenant.code}:{self.username}"
+
+
+class ERPDataPermissionPolicy(models.Model):
+    TYPE_CHOICES = (
+        ("BASIC", "基础数据"),
+        ("BUSINESS", "业务数据"),
+        ("SPECIAL", "特殊数据"),
+    )
+
+    tenant = models.ForeignKey(
+        "tenant.Tenant", on_delete=models.CASCADE, related_name="erp_data_permission_policies"
+    )
+    resource_code = models.CharField(max_length=100, verbose_name="数据资源标识")
+    permission_type = models.CharField(max_length=20, choices=TYPE_CHOICES, verbose_name="数据权限类型")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "erp_data_permission_policies"
+        constraints = [
+            models.UniqueConstraint(fields=["tenant", "resource_code"], name="uniq_erp_data_policy_per_tenant"),
+        ]
+
+
+class ERPDataSpecialGrant(models.Model):
+    tenant = models.ForeignKey(
+        "tenant.Tenant", on_delete=models.CASCADE, related_name="erp_data_special_grants"
+    )
+    resource_code = models.CharField(max_length=100, verbose_name="数据资源标识")
+    object_id = models.CharField(max_length=64, verbose_name="授权对象标识")
+    user = models.ForeignKey(
+        ERPUser, on_delete=models.CASCADE, null=True, blank=True, related_name="data_special_grants"
+    )
+    role = models.ForeignKey(
+        ERPRole, on_delete=models.CASCADE, null=True, blank=True, related_name="data_special_grants"
+    )
+    department = models.ForeignKey(
+        ERPDepartment, on_delete=models.CASCADE, null=True, blank=True, related_name="data_special_grants"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "erp_data_special_grants"
+        indexes = [
+            models.Index(
+                fields=["tenant", "resource_code", "object_id"],
+                name="erp_data_sp_tenant_94a421_idx",
+            )
+        ]

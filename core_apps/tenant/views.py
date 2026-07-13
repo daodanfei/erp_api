@@ -122,7 +122,7 @@ class TenantViewSet(viewsets.ModelViewSet):
                     "name": user.name,
                     "status": user.status,
                     "must_change_password": user.must_change_password,
-                    "is_super_admin": user.is_super_admin,
+                    "role_names": list(user.roles.values_list("name", flat=True)),
                 },
             }
         )
@@ -144,7 +144,7 @@ class TenantViewSet(viewsets.ModelViewSet):
                     "name": user.name,
                     "status": user.status,
                     "must_change_password": user.must_change_password,
-                    "is_super_admin": user.is_super_admin,
+                    "role_names": list(user.roles.values_list("name", flat=True)),
                 },
                 "initial_password": initial_password,
                 "created": created,

@@ -83,6 +83,8 @@ class APPaymentViewSet(BaseBusinessViewSet):
 
     def get_queryset(self):
         queryset = self.get_tenant_scoped_queryset()
+        if self.get_data_permission_type(queryset) != "BUSINESS":
+            return self.apply_data_permission_scope(queryset)
         user = self.request.user
         scope_q = get_data_scope_filter(user, dept_field=self.dept_field, user_field=self.user_field)
         if not scope_q.children:
@@ -204,9 +206,40 @@ class SupplierRefundViewSet(BaseBusinessViewSet):
         'create': 'ap:refund:create',
         'update': 'ap:refund:update',
         'destroy': 'ap:refund:delete',
+        'submit': 'ap:refund:submit',
         'approve': 'ap:refund:approve',
         'execute': 'ap:refund:execute',
     }
+
+    def get_queryset(self):
+        queryset = self.get_tenant_scoped_queryset()
+        if self.get_data_permission_type(queryset) != "BUSINESS":
+            return self.apply_data_permission_scope(queryset)
+        user = self.request.user
+        scope_q = get_data_scope_filter(user, dept_field=self.dept_field, user_field=self.user_field)
+        if not scope_q.children:
+            return queryset.distinct()
+
+        visible_q = scope_q
+        erp_user = as_erp_user(user)
+        if getattr(self, 'action', None) in ['list', 'retrieve', 'approve'] and user.roles.filter(
+            permissions__code='ap:refund:approve',
+            permissions__status=True,
+            status=True,
+        ).exists():
+            pending_q = Q(status='PENDING_APPROVAL')
+            if erp_user is not None:
+                pending_q &= ~Q(created_by=erp_user) & ~Q(submitted_by=erp_user)
+            visible_q |= pending_q
+
+        if getattr(self, 'action', None) in ['list', 'retrieve', 'execute'] and user.roles.filter(
+            permissions__code='ap:refund:execute',
+            permissions__status=True,
+            status=True,
+        ).exists():
+            visible_q |= Q(status='APPROVED', executed_at__isnull=True)
+
+        return queryset.filter(visible_q).distinct()
 
     def create(self, request, *args, **kwargs):
         try:
@@ -233,6 +266,15 @@ class SupplierRefundViewSet(BaseBusinessViewSet):
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        refund = self.get_object()
+        try:
+            APService.submit_supplier_refund(refund, request.user)
+            return Response({'status': 'pending_approval'})
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         refund = self.get_object()
         try:
@@ -245,7 +287,18 @@ class SupplierRefundViewSet(BaseBusinessViewSet):
     def execute(self, request, pk=None):
         refund = self.get_object()
         try:
-            APService.execute_supplier_refund(refund, request.user)
+            APService.execute_supplier_refund(
+                refund,
+                request.user,
+                payment_method=request.data.get('payment_method'),
+                cash_account=(
+                    self.get_scoped_related_object(CashAccount.objects.all(), id=request.data.get('cash_account'))
+                    if request.data.get('cash_account') else None
+                ),
+                bank_account=request.data.get('bank_account'),
+                reference_no=request.data.get('reference_no'),
+                remark=request.data.get('remark'),
+            )
             return Response({'status': 'executed'})
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)

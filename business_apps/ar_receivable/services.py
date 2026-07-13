@@ -255,10 +255,31 @@ class ARService:
 
     @staticmethod
     @transaction.atomic
-    def approve_customer_refund(refund, operator):
+    def submit_customer_refund(refund, operator):
         refund = CustomerRefund.objects.select_for_update().get(id=refund.id)
         if refund.status != 'DRAFT':
-            raise ValueError("只有草稿状态的退款单可以审核")
+            raise ValueError("只有草稿状态的退款单可以提交审核")
+        refund.status = 'PENDING_APPROVAL'
+        refund.submitted_by = build_erp_user_fk_kwargs(
+            CustomerRefund,
+            user=operator,
+            field_names=("submitted_by",),
+        ).get("submitted_by")
+        refund.submitted_at = timezone.now()
+        refund.save(update_fields=['status', 'submitted_by', 'submitted_at', 'updated_at'])
+        return refund
+
+    @staticmethod
+    @transaction.atomic
+    def approve_customer_refund(refund, operator):
+        refund = CustomerRefund.objects.select_for_update().get(id=refund.id)
+        if refund.status != 'PENDING_APPROVAL':
+            raise ValueError("只有待审核状态的退款单可以审核")
+        erp_user_id = get_erp_user_id(operator)
+        if erp_user_id is not None and (
+            refund.created_by_id == erp_user_id or refund.submitted_by_id == erp_user_id
+        ):
+            raise ValueError("审核人不能是退款单创建人或提交人")
         refund.status = 'APPROVED'
         refund.approved_by = build_erp_user_fk_kwargs(
             CustomerRefund,
@@ -271,7 +292,16 @@ class ARService:
 
     @staticmethod
     @transaction.atomic
-    def execute_customer_refund(refund, operator):
+    def execute_customer_refund(
+        refund,
+        operator,
+        *,
+        payment_method=None,
+        cash_account=None,
+        bank_account=None,
+        reference_no=None,
+        remark=None,
+    ):
         refund = CustomerRefund.objects.select_for_update().get(id=refund.id)
         if refund.status != 'APPROVED':
             raise ValueError("只有已审核状态的退款单可以执行")
@@ -281,6 +311,13 @@ class ARService:
         receivable = Receivable.objects.select_for_update().get(id=refund.receivable_id)
         if receivable.balance < refund.refund_amount:
             raise ValueError("退款金额超过红字应收待退款余额")
+
+        if payment_method:
+            refund.payment_method = payment_method
+        refund.cash_account = cash_account
+        refund.bank_account = bank_account
+        refund.reference_no = reference_no
+        refund.remark = remark
 
         if refund.cash_account:
             from business_apps.finance.models import CashAccount, CashAccountTransaction
@@ -306,7 +343,18 @@ class ARService:
 
         refund.status = 'COMPLETED'
         refund.executed_at = timezone.now()
-        refund.save(update_fields=['status', 'executed_at', 'updated_at'])
+        refund.save(
+            update_fields=[
+                'payment_method',
+                'cash_account',
+                'bank_account',
+                'reference_no',
+                'remark',
+                'status',
+                'executed_at',
+                'updated_at',
+            ]
+        )
 
         from business_apps.accounting.services import PostingService
         PostingService.post_customer_refund_execution(refund, operator)

@@ -186,7 +186,9 @@ class ERPUserProvisionService:
         return (
             tenant.erp_users
             .prefetch_related("roles")
-            .order_by("-is_super_admin", "id")
+            .filter(roles__is_system=True, roles__data_scope="ALL", roles__status=True)
+            .order_by("id")
+            .distinct()
             .first()
         )
 
@@ -245,7 +247,6 @@ class ERPUserProvisionService:
             password=initial_password,
             name="租户超级管理员",
             status=True,
-            is_super_admin=True,
             must_change_password=True,
         )
         role = ERPUserProvisionService.ensure_super_admin_role(user=user)

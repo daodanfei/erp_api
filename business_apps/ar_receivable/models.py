@@ -74,6 +74,7 @@ class Receivable(models.Model):
 class CustomerRefund(models.Model):
     STATUS_CHOICES = (
         ('DRAFT', '草稿'),
+        ('PENDING_APPROVAL', '待审核'),
         ('APPROVED', '已审核'),
         ('COMPLETED', '已退款'),
         ('CANCELLED', '已作废'),
@@ -93,12 +94,15 @@ class CustomerRefund(models.Model):
     refund_amount = models.DecimalField(max_digits=15, decimal_places=2, verbose_name="退款金额")
     refund_date = models.DateField(verbose_name="退款日期")
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHODS, default='BANK_TRANSFER')
+    bank_account = models.CharField(max_length=100, null=True, blank=True, verbose_name="退款银行卡/账号")
     cash_account = models.ForeignKey('finance.CashAccount', on_delete=models.PROTECT, null=True, blank=True, verbose_name="退款账户")
     reference_no = models.CharField(max_length=100, null=True, blank=True, verbose_name="交易流水号/支票号")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
     remark = models.TextField(null=True, blank=True)
     dept = models.ForeignKey(ERPDepartment, on_delete=models.SET_NULL, null=True, blank=True)
     created_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, related_name='created_customer_refunds')
+    submitted_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='submitted_customer_refunds')
+    submitted_at = models.DateTimeField(null=True, blank=True)
     approved_by = models.ForeignKey(ERPUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_customer_refunds')
     approved_at = models.DateTimeField(null=True, blank=True)
     executed_at = models.DateTimeField(null=True, blank=True, verbose_name="执行时间")

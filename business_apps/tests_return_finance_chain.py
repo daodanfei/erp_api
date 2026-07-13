@@ -11,9 +11,11 @@ from business_apps.accounting.models import BusinessPostingLog, Voucher
 from business_apps.accounting.services import SubjectInitService
 from business_apps.ap_payable.models import APAccount, SupplierCreditNote, SupplierRefund
 from business_apps.ap_payable.services import APService
-from business_apps.ar_receivable.models import CustomerRefund, Receivable, WriteOff
+from business_apps.ar_receivable.models import CustomerRefund, Receipt, Receivable, WriteOff
+from business_apps.ar_receivable.serializers import CustomerRefundSerializer, ReceiptSerializer
 from business_apps.ar_receivable.services import ARService
 from business_apps.crm.models import Customer
+from business_apps.finance.models import CashAccount
 from business_apps.inventory.models import Inventory, Product, ProductCategory, Unit, Warehouse
 from business_apps.purchase.models import PurchaseOrder, PurchaseOrderItem, PurchaseReceipt, PurchaseReceiptItem
 from business_apps.supplier.models import Supplier
@@ -45,6 +47,12 @@ class ReturnFinanceChainTest(TestCase):
         self.user = ERPUser.objects.create_user(
             tenant=self.tenant,
             username="return_finance_user",
+            password="password",
+            must_change_password=False,
+        )
+        self.approver = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="return_finance_approver",
             password="password",
             must_change_password=False,
         )
@@ -91,6 +99,13 @@ class ReturnFinanceChainTest(TestCase):
             return_approval_enabled=lambda: False,
         )
 
+    def _supply_chain_policy_with_return_approval(self):
+        return SimpleNamespace(
+            sales_return_enabled=lambda: True,
+            purchase_return_enabled=lambda: True,
+            return_approval_enabled=lambda: True,
+        )
+
     def _inventory_policy(self):
         return SimpleNamespace(resolve_warehouse=lambda warehouse: warehouse)
 
@@ -109,6 +124,44 @@ class ReturnFinanceChainTest(TestCase):
         return patch.multiple(
             "business_apps.platform.services.CodeRuleService",
             generate=build_code_rule_generator(),
+        )
+
+    @patch("business_apps.ar_receivable.serializers.has_erp_role_permission", return_value=True)
+    def test_receipt_and_refund_serializer_use_their_own_permission_codes(self, mocked_has_permission):
+        receivable = Receivable.objects.create(
+            tenant=self.tenant,
+            receivable_no="AR-PERMISSION-REFUND-001",
+            customer=self.customer,
+            source_type="SALES_RETURN",
+            amount=Decimal("-10.00"),
+            due_date="2026-07-13",
+            status="REFUND_PENDING",
+        )
+        receipt = Receipt.objects.create(
+            tenant=self.tenant,
+            receipt_no="RC-PERMISSION-001",
+            customer=self.customer,
+            amount=Decimal("10.00"),
+            unwritten_amount=Decimal("10.00"),
+            receipt_date="2026-07-13",
+            status="DRAFT",
+        )
+        refund = CustomerRefund.objects.create(
+            tenant=self.tenant,
+            refund_no="RF-PERMISSION-001",
+            customer=self.customer,
+            receivable=receivable,
+            refund_amount=Decimal("10.00"),
+            refund_date="2026-07-13",
+            status="PENDING_APPROVAL",
+        )
+        request = SimpleNamespace(user=self.user)
+
+        self.assertTrue(ReceiptSerializer(context={"request": request}).get_can_approve(receipt))
+        self.assertTrue(CustomerRefundSerializer(context={"request": request}).get_can_approve(refund))
+        self.assertEqual(
+            [call.args[1] for call in mocked_has_permission.call_args_list],
+            ["ar:receipt:approve", "ar:refund:approve"],
         )
 
     @patch("business_apps.inventory.services.get_policy")
@@ -273,6 +326,57 @@ class ReturnFinanceChainTest(TestCase):
                 [{"product": self.product, "quantity": Decimal("2.000")}],
                 self.user,
             )
+
+    @patch("business_apps.supply_chain.services.get_policy")
+    def test_sales_return_requires_submit_and_different_approver(self, mocked_supply_chain_policy):
+        mocked_supply_chain_policy.return_value = self._supply_chain_policy_with_return_approval()
+
+        sales_order = SalesOrder.objects.create(
+            tenant=self.tenant,
+            order_no="SO-RETURN-SUBMIT-001",
+            customer=self.customer,
+            customer_name_snapshot=self.customer.customer_name,
+            status=SalesOrder.STATUS_SHIPPED,
+            total_quantity=Decimal("3.000"),
+            total_amount=Decimal("30.00"),
+            created_by=self.user,
+        )
+        SalesOrderItem.objects.create(
+            tenant=self.tenant,
+            order=sales_order,
+            product=self.product,
+            product_name_snapshot=self.product.name,
+            warehouse=self.warehouse,
+            quantity=Decimal("3.000"),
+            unit_price=Decimal("10.00"),
+            amount=Decimal("30.00"),
+            shipped_quantity=Decimal("3.000"),
+        )
+        return_order = SalesReturnService.create_order(
+            self.customer,
+            sales_order,
+            self.warehouse,
+            [{"product": self.product, "quantity": Decimal("1.000")}],
+            self.user,
+        )
+
+        with self.assertRaisesMessage(ValueError, "只有待审核状态的销售退货单可以审核"):
+            SalesReturnService.approve_order(return_order, self.approver)
+
+        SalesReturnService.submit_order(return_order, self.user)
+        return_order.refresh_from_db()
+        self.assertEqual(return_order.status, "PENDING_APPROVAL")
+        self.assertEqual(return_order.submitted_by_id, self.user.id)
+        self.assertIsNotNone(return_order.submitted_at)
+
+        with self.assertRaisesMessage(ValueError, "审核人不能是单据创建人"):
+            SalesReturnService.approve_order(return_order, self.user)
+
+        SalesReturnService.approve_order(return_order, self.approver)
+        return_order.refresh_from_db()
+        self.assertEqual(return_order.status, "APPROVED")
+        self.assertEqual(return_order.approved_by_id, self.approver.id)
+        self.assertIsNotNone(return_order.approved_at)
 
     @patch("core_apps.common.permissions.has_erp_role_permission", return_value=True)
     @patch("business_apps.supply_chain.services.get_policy")
@@ -537,6 +641,57 @@ class ReturnFinanceChainTest(TestCase):
                 self.user,
             )
 
+    @patch("business_apps.supply_chain.services.get_policy")
+    def test_purchase_return_requires_submit_and_different_approver(self, mocked_supply_chain_policy):
+        mocked_supply_chain_policy.return_value = self._supply_chain_policy_with_return_approval()
+
+        purchase_order = PurchaseOrder.objects.create(
+            tenant=self.tenant,
+            purchase_order_no="PO-RETURN-SUBMIT-001",
+            supplier=self.supplier,
+            supplier_name_snapshot=self.supplier.supplier_name,
+            status=PurchaseOrder.STATUS_RECEIVED,
+            total_quantity=Decimal("3.000"),
+            total_amount=Decimal("24.00"),
+            created_by=self.user,
+        )
+        PurchaseOrderItem.objects.create(
+            tenant=self.tenant,
+            purchase_order=purchase_order,
+            product=self.product,
+            product_name_snapshot=self.product.name,
+            warehouse=self.warehouse,
+            quantity=Decimal("3.000"),
+            unit_price=Decimal("8.00"),
+            amount=Decimal("24.00"),
+            received_quantity=Decimal("3.000"),
+        )
+        return_order = PurchaseReturnService.create_order(
+            self.supplier,
+            purchase_order,
+            self.warehouse,
+            [{"product": self.product, "quantity": Decimal("1.000")}],
+            self.user,
+        )
+
+        with self.assertRaisesMessage(ValueError, "只有待审核状态的采购退货单可以审核"):
+            PurchaseReturnService.approve_order(return_order, self.approver)
+
+        PurchaseReturnService.submit_order(return_order, self.user)
+        return_order.refresh_from_db()
+        self.assertEqual(return_order.status, "PENDING_APPROVAL")
+        self.assertEqual(return_order.submitted_by_id, self.user.id)
+        self.assertIsNotNone(return_order.submitted_at)
+
+        with self.assertRaisesMessage(ValueError, "审核人不能是单据创建人"):
+            PurchaseReturnService.approve_order(return_order, self.user)
+
+        PurchaseReturnService.approve_order(return_order, self.approver)
+        return_order.refresh_from_db()
+        self.assertEqual(return_order.status, "APPROVED")
+        self.assertEqual(return_order.approved_by_id, self.approver.id)
+        self.assertIsNotNone(return_order.approved_at)
+
     @patch("business_apps.inventory.services.get_policy")
     @patch("business_apps.accounting.services.get_policy")
     @patch("business_apps.supply_chain.services.get_policy")
@@ -606,18 +761,69 @@ class ReturnFinanceChainTest(TestCase):
 
         SalesReturnService.complete_order(return_order, self.user)
         refund = CustomerRefund.objects.get(customer=self.customer)
-        ARService.approve_customer_refund(refund, self.user)
-        ARService.execute_customer_refund(refund, self.user)
+        cash_account = CashAccount.objects.create(
+            tenant=self.tenant,
+            name="退款银行账户",
+            type="BANK",
+            account_type="BANK",
+            account_no="6222000000000001",
+            current_balance=Decimal("100.00"),
+            status=True,
+        )
+        ARService.submit_customer_refund(refund, self.user)
+        ARService.approve_customer_refund(refund, self.approver)
+        ARService.execute_customer_refund(
+            refund,
+            self.user,
+            payment_method="BANK_TRANSFER",
+            cash_account=cash_account,
+            bank_account="6222000000009999",
+            reference_no="AR-REFUND-TRACE-001",
+            remark="客户退款执行",
+        )
 
         refund.refresh_from_db()
         refund_receivable = Receivable.objects.get(id=refund.receivable_id)
         voucher = Voucher.objects.get(source_type="AR_REFUND", source_id=refund.id)
 
         self.assertEqual(refund.status, "COMPLETED")
+        self.assertEqual(refund.submitted_by_id, self.user.id)
+        self.assertEqual(refund.approved_by_id, self.approver.id)
+        self.assertEqual(refund.cash_account_id, cash_account.id)
+        self.assertEqual(refund.bank_account, "6222000000009999")
         self.assertEqual(refund_receivable.status, "REFUNDED")
         self.assertEqual(refund_receivable.written_off_amount, Decimal("20.00"))
         self.assertEqual(voucher.total_debit, Decimal("20.00"))
         self.assertEqual(voucher.total_credit, Decimal("20.00"))
+
+    def test_customer_refund_requires_submit_and_different_approver(self):
+        receivable = Receivable.objects.create(
+            tenant=self.tenant,
+            receivable_no="AR-REFUND-SUBMIT-001",
+            customer=self.customer,
+            source_type="SALES_RETURN",
+            amount=Decimal("-10.00"),
+            written_off_amount=Decimal("0.00"),
+            due_date="2026-07-13",
+            status="REFUND_PENDING",
+        )
+        refund = CustomerRefund.objects.create(
+            tenant=self.tenant,
+            refund_no="RF-SUBMIT-001",
+            customer=self.customer,
+            receivable=receivable,
+            refund_amount=Decimal("10.00"),
+            refund_date="2026-07-13",
+            status="DRAFT",
+            created_by=self.user,
+        )
+
+        with self.assertRaisesMessage(ValueError, "只有待审核状态的退款单可以审核"):
+            ARService.approve_customer_refund(refund, self.approver)
+
+        ARService.submit_customer_refund(refund, self.user)
+        with self.assertRaisesMessage(ValueError, "审核人不能是退款单创建人或提交人"):
+            ARService.approve_customer_refund(refund, self.user)
 
     @patch("business_apps.ap_payable.services.get_policy")
     @patch("business_apps.inventory.services.get_policy")
@@ -698,8 +904,26 @@ class ReturnFinanceChainTest(TestCase):
 
         PurchaseReturnService.complete_order(return_order, self.user)
         refund = SupplierRefund.objects.get(supplier=self.supplier)
-        APService.approve_supplier_refund(refund, self.user)
-        APService.execute_supplier_refund(refund, self.user)
+        cash_account = CashAccount.objects.create(
+            tenant=self.tenant,
+            name="供应商退款收款账户",
+            type="BANK",
+            account_type="BANK",
+            account_no="6222000000000002",
+            current_balance=Decimal("0.00"),
+            status=True,
+        )
+        APService.submit_supplier_refund(refund, self.user)
+        APService.approve_supplier_refund(refund, self.approver)
+        APService.execute_supplier_refund(
+            refund,
+            self.user,
+            payment_method="BANK_TRANSFER",
+            cash_account=cash_account,
+            bank_account="6222000000008888",
+            reference_no="AP-REFUND-TRACE-001",
+            remark="供应商退款收款",
+        )
 
         refund.refresh_from_db()
         purchase_order_item.refresh_from_db()
@@ -707,8 +931,43 @@ class ReturnFinanceChainTest(TestCase):
         voucher = Voucher.objects.get(source_type="AP_SUPPLIER_REFUND", source_id=refund.id)
 
         self.assertEqual(refund.status, "COMPLETED")
+        self.assertEqual(refund.submitted_by_id, self.user.id)
+        self.assertEqual(refund.approved_by_id, self.approver.id)
+        self.assertEqual(refund.cash_account_id, cash_account.id)
+        self.assertEqual(refund.bank_account, "6222000000008888")
         self.assertEqual(credit_note.status, "USED")
         self.assertEqual(credit_note.used_amount, Decimal("30.00"))
         self.assertEqual(purchase_order_item.returned_quantity, Decimal("3.000"))
         self.assertEqual(voucher.total_debit, Decimal("30.00"))
         self.assertEqual(voucher.total_credit, Decimal("30.00"))
+
+    def test_supplier_refund_requires_submit_and_different_approver(self):
+        credit_note = SupplierCreditNote.objects.create(
+            tenant=self.tenant,
+            credit_note_no="CN-SUBMIT-001",
+            supplier=self.supplier,
+            source_document_no_snapshot="PR-SUBMIT-001",
+            source_id=1,
+            amount=Decimal("10.00"),
+            used_amount=Decimal("0.00"),
+            note_date="2026-07-13",
+            status="OPEN",
+            created_by=self.user,
+        )
+        refund = SupplierRefund.objects.create(
+            tenant=self.tenant,
+            refund_no="SRF-SUBMIT-001",
+            supplier=self.supplier,
+            credit_note=credit_note,
+            refund_amount=Decimal("10.00"),
+            refund_date="2026-07-13",
+            status="DRAFT",
+            created_by=self.user,
+        )
+
+        with self.assertRaisesMessage(ValueError, "只有待审核状态的供应商退款单可以审核"):
+            APService.approve_supplier_refund(refund, self.approver)
+
+        APService.submit_supplier_refund(refund, self.user)
+        with self.assertRaisesMessage(ValueError, "审核人不能是退款单创建人或提交人"):
+            APService.approve_supplier_refund(refund, self.user)

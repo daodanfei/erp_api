@@ -86,6 +86,7 @@ MODULE = ModuleDefinition(
         {"code": "ap:refund:create", "name": "新建供应商退款单", "parent": "ap:refund"},
         {"code": "ap:refund:update", "name": "编辑供应商退款单", "parent": "ap:refund"},
         {"code": "ap:refund:delete", "name": "删除供应商退款单", "parent": "ap:refund"},
+        {"code": "ap:refund:submit", "name": "提交供应商退款单审核", "parent": "ap:refund"},
         {"code": "ap:refund:approve", "name": "审核供应商退款单", "parent": "ap:refund"},
         {"code": "ap:refund:execute", "name": "执行供应商退款单", "parent": "ap:refund"},
         {"code": "ap:allocation:view", "name": "查看付款核销", "parent": "ap"},

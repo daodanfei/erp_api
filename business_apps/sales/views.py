@@ -3,6 +3,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.core.exceptions import ObjectDoesNotExist
 from core_apps.common.viewsets import BaseBusinessViewSet
+from core_apps.system.operation_log import (
+    OperationLogChangeTracker,
+    build_operation_log_new_value,
+    summarize_operation_log_items,
+)
 from .models import SalesOrder, SalesOrderItem, Shipment, OrderApprovalLog, OrderAttachment
 from .serializers import SalesOrderSerializer, SalesOrderItemSerializer, ShipmentSerializer, OrderApprovalLogSerializer
 from business_apps.supply_chain.serializers import OutboundOrderSerializer
@@ -70,6 +75,7 @@ class SalesOrderViewSet(BaseBusinessViewSet):
 
     def update(self, request, *args, **kwargs):
         order = self.get_object()
+        change_tracker = OperationLogChangeTracker(order, request.data)
         if order.status not in ('DRAFT', 'REJECTED'):
             return Response({"detail": "只有草稿或已驳回状态的订单可以修改"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -98,6 +104,14 @@ class SalesOrderViewSet(BaseBusinessViewSet):
                 items_data=processed_items,
                 remark=remark,
                 expected_delivery_date=expected_delivery_date,
+            )
+            change_tracker.finish(
+                request,
+                order,
+                extra_changes=(
+                    [build_operation_log_new_value("items", summarize_operation_log_items(processed_items))]
+                    if processed_items is not None else []
+                ),
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data)

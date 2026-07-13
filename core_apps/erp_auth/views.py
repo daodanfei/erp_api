@@ -5,6 +5,12 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
 
 from core_apps.common.permissions import ERPActionPermission, ERPUserOnly
+from core_apps.system.operation_log import (
+    OperationLogModelViewSetMixin,
+    build_operation_log_change,
+    collect_serializer_operation_log_changes,
+    set_operation_log_changes,
+)
 
 from .models import ERPDataPermissionPolicy, ERPDataSpecialGrant, ERPDepartment, ERPPermission, ERPRole, ERPUser
 from .authentication import ERPJWTAuthentication
@@ -43,7 +49,7 @@ class ERPPermissionViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.filter(code__in=enabled_codes).order_by("order", "id")
 
 
-class ERPDepartmentViewSet(viewsets.ModelViewSet):
+class ERPDepartmentViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     queryset = ERPDepartment.objects.select_related("tenant", "parent").all()
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     filterset_fields = ["status"]
@@ -81,7 +87,7 @@ class ERPDepartmentViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 
-class ERPRoleViewSet(viewsets.ModelViewSet):
+class ERPRoleViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     queryset = ERPRole.objects.select_related("tenant").prefetch_related("permissions").all()
     serializer_class = ERPRoleSerializer
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
@@ -151,8 +157,26 @@ class ERPDataResourceView(APIView):
             if code in seen:
                 raise ValidationError({"resources": "数据资源不能重复"})
             seen.add(code)
+        current_types = {
+            policy.resource_code: policy.permission_type
+            for policy in ERPDataPermissionPolicy.objects.filter(
+                tenant=request.user.tenant,
+                resource_code__in=[item["code"] for item in items],
+            )
+        }
+        type_labels = {"BASIC": "租户共享", "BUSINESS": "按业务数据范围", "SPECIAL": "按专项授权"}
+        changes = []
         with transaction.atomic():
             for item in items:
+                definition = RESOURCE_BY_CODE[item["code"]]
+                old_type = current_types.get(item["code"], definition.default_type)
+                new_type = item["permission_type"]
+                if old_type != new_type:
+                    changes.append(build_operation_log_change(
+                        "resources",
+                        f"{definition.name}：{type_labels.get(old_type, old_type)}",
+                        f"{definition.name}：{type_labels.get(new_type, new_type)}",
+                    ))
                 ERPDataPermissionPolicy.objects.update_or_create(
                     tenant=request.user.tenant,
                     resource_code=item["code"],
@@ -162,6 +186,7 @@ class ERPDataResourceView(APIView):
                     ERPDataSpecialGrant.objects.filter(
                         tenant=request.user.tenant, resource_code=item["code"]
                     ).delete()
+        set_operation_log_changes(request, changes)
         return self.get(request)
 
 
@@ -179,7 +204,7 @@ class ERPDataSpecialGrantViewSet(viewsets.ModelViewSet):
         return queryset.filter(resource_code=resource_code) if resource_code else queryset
 
 
-class ERPUserViewSet(viewsets.ModelViewSet):
+class ERPUserViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     queryset = ERPUser.objects.select_related("tenant", "dept").prefetch_related("roles").all()
     serializer_class = ERPUserSerializer
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
@@ -215,6 +240,7 @@ class ERPUserViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
+        set_operation_log_changes(request, collect_serializer_operation_log_changes(serializer))
         user = serializer.save()
         return response.Response(ERPUserSerializer(user).data, status=status.HTTP_200_OK)
 

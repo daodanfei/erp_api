@@ -5,6 +5,7 @@ from rest_framework.exceptions import ValidationError
 from core_apps.common.permissions import ERPActionPermission, ERPUserOnly, ModuleEnabledPermission
 from core_apps.common.utils.data_scope import get_data_scope_filter
 from core_apps.erp_auth.models import ERPUser
+from core_apps.system.operation_log import OperationLogModelViewSetMixin
 from core_apps.tenant.models import Tenant
 
 
@@ -103,7 +104,7 @@ def validate_erp_related_tenant_scope(model, *, validated_data: dict, user) -> N
             raise ValidationError({field.name: "无权查看或引用该数据"})
 
 
-class ModuleAwareModelViewSet(viewsets.ModelViewSet):
+class ModuleAwareModelViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     permission_classes = [ERPUserOnly, ModuleEnabledPermission, ERPActionPermission]
     module_key = ""
     data_permission_default_type = "BASIC"

@@ -5,6 +5,11 @@ from django.core.exceptions import ObjectDoesNotExist
 from django_filters.rest_framework import DjangoFilterBackend
 from core_apps.common.permissions import ERPActionPermission, ERPUserOnly, ModuleEnabledPermission
 from core_apps.common.viewsets import BaseBusinessViewSet
+from core_apps.system.operation_log import (
+    OperationLogChangeTracker,
+    build_operation_log_new_value,
+    summarize_operation_log_items,
+)
 from .models import OutboundOrder, TransferOrder, SalesReturnOrder, PurchaseReturnOrder, InventoryAlert
 from .serializers import (
     OutboundOrderSerializer, OutboundOrderListSerializer,
@@ -175,6 +180,7 @@ class TransferOrderViewSet(BaseBusinessViewSet):
 
     def update(self, request, *args, **kwargs):
         order = self.get_object()
+        change_tracker = OperationLogChangeTracker(order, request.data)
         from_wh_id = request.data.get('from_warehouse')
         to_wh_id = request.data.get('to_warehouse')
         items_data = request.data.get('items', [])
@@ -200,6 +206,11 @@ class TransferOrderViewSet(BaseBusinessViewSet):
                 processed_items,
                 request.user,
                 remark=request.data.get('remark'),
+            )
+            change_tracker.finish(
+                request,
+                order,
+                extra_changes=[build_operation_log_new_value("items", summarize_operation_log_items(processed_items))],
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data)

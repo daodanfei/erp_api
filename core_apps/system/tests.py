@@ -8,6 +8,8 @@ from rest_framework.response import Response
 
 from business_apps.inventory.models import Product, ProductCategory, Unit
 from business_apps.inventory.serializers import ProductSerializer, UnitSerializer
+from business_apps.purchase.models import PurchaseOrder
+from business_apps.supplier.models import Supplier
 from core_apps.erp_auth.models import ERPPermission, ERPRole, ERPUser
 from core_apps.erp_auth.tokens import ERPRefreshToken
 from core_apps.tenant.models import Tenant
@@ -302,6 +304,30 @@ class OperationLogMiddlewareTest(TestCase):
             ],
         )
         self.assertEqual(request.operation_log_changes, changes)
+
+    def test_service_driven_update_ignores_reverse_relations_in_request_payload(self):
+        supplier = Supplier.objects.create(
+            tenant=self.tenant,
+            supplier_code="SUP005",
+            supplier_name="测试供应商",
+        )
+        order = PurchaseOrder.objects.create(
+            tenant=self.tenant,
+            purchase_order_no="PO005",
+            supplier=supplier,
+            remark="原备注",
+        )
+
+        # Reverse relation fields such as PurchaseOrder.items are represented
+        # by ManyToOneRel and intentionally have no ``attname`` attribute.
+        tracker = OperationLogChangeTracker(order, {"items": [{"id": 1}], "remark": "新备注"})
+        order.remark = "新备注"
+        request = RequestFactory().put("/api/purchase/orders/5/", content_type="application/json")
+
+        self.assertEqual(
+            tracker.finish(request, order),
+            [{"field": "remark", "old": "原备注", "new": "新备注"}],
+        )
 
 
 class OperationLogSerializerTest(TestCase):

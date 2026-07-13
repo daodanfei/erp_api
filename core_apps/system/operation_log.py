@@ -148,6 +148,11 @@ class OperationLogChangeTracker:
                 model_field = instance._meta.get_field(field_name)
             except Exception:
                 continue
+            # Reverse relations (for example PurchaseOrder.items) are
+            # auto-created ManyToOneRel objects.  They do not have ``attname``
+            # and service-owned nested updates are logged separately.
+            if getattr(model_field, "auto_created", False):
+                continue
             if getattr(model_field, "many_to_many", False):
                 continue
             if getattr(model_field, "is_relation", False):

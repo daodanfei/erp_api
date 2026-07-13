@@ -541,6 +541,61 @@ class ERPAuthApiTest(APITestCase):
         granted_codes = set(response.data["permissions"])
         self.assertTrue({"system", "system:user", "user:create", "inventory", "inventory:product:view"}.issubset(granted_codes))
 
+    def test_refresh_uses_erp_user_domain_and_returns_rotated_tokens(self):
+        refresh_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="refresh_only_erp_user",
+            name="Refresh User",
+            password="refresh-password-123",
+        )
+        self.assertFalse(User.objects.filter(pk=refresh_user.pk).exists())
+        login_response = self.client.post(
+            "/api/erp-auth/login/",
+            {
+                "tenant_code": self.tenant.code,
+                "username": refresh_user.username,
+                "password": "refresh-password-123",
+            },
+            format="json",
+        )
+
+        response = self.client.post(
+            "/api/erp-auth/refresh/",
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+        me_response = self.client.get("/api/erp-auth/me/")
+        self.assertEqual(me_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(me_response.data["user"]["id"], refresh_user.id)
+
+    def test_refresh_rejects_inactive_erp_user_without_server_error(self):
+        login_response = self.client.post(
+            "/api/erp-auth/login/",
+            {
+                "tenant_code": self.tenant.code,
+                "username": self.erp_user.username,
+                "password": self.initial_password,
+            },
+            format="json",
+        )
+        self.erp_user.status = False
+        self.erp_user.save(update_fields=["status"])
+
+        response = self.client.post(
+            "/api/erp-auth/refresh/",
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data["detail"].code, "user_inactive")
+
     def test_change_password_clears_must_change_password_and_allows_relogin(self):
         login_response = self.client.post(
             "/api/erp-auth/login/",

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 from .models import ERPDataSpecialGrant, ERPDepartment, ERPPermission, ERPRole, ERPUser
@@ -349,7 +350,35 @@ class ERPTokenRefreshSerializer(TokenRefreshSerializer):
         refresh = self.token_class(attrs["refresh"])
         if refresh.get("user_scope") != "erp":
             raise AuthenticationFailed("Invalid ERP refresh token", code="token_not_valid")
-        return super().validate(attrs)
+
+        user_id = refresh.get(api_settings.USER_ID_CLAIM)
+        try:
+            user = ERPUser.objects.select_related("tenant").get(
+                **{api_settings.USER_ID_FIELD: user_id}
+            )
+        except ERPUser.DoesNotExist as exc:
+            raise AuthenticationFailed("ERP user not found", code="user_not_found") from exc
+
+        if not user.status:
+            raise AuthenticationFailed("ERP user inactive", code="user_inactive")
+        if user.tenant.status != "ACTIVE":
+            raise AuthenticationFailed("Tenant inactive", code="tenant_inactive")
+        if user.tenant_id != refresh.get("tenant_id"):
+            raise AuthenticationFailed("Tenant mismatch", code="tenant_mismatch")
+
+        data = {"access": str(refresh.access_token)}
+        if api_settings.ROTATE_REFRESH_TOKENS:
+            if api_settings.BLACKLIST_AFTER_ROTATION:
+                try:
+                    refresh.blacklist()
+                except AttributeError:
+                    pass
+            refresh.set_jti()
+            refresh.set_exp()
+            refresh.set_iat()
+            refresh.outstand()
+            data["refresh"] = str(refresh)
+        return data
 
 
 class ERPChangePasswordSerializer(serializers.Serializer):

@@ -190,3 +190,26 @@ class TenantDataPermissionConfigApiTest(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+    def test_tenant_can_save_unchanged_resource_type_config(self):
+        permission_patch = patch("core_apps.common.permissions.has_erp_role_permission", return_value=True)
+        permission_patch.start()
+        self.addCleanup(permission_patch.stop)
+        response = self.client.get("/api/erp-auth/data-permissions/resources/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        stocktake = next(item for item in response.data if item["code"] == "inventory.stocktake")
+        self.assertEqual(stocktake["permission_type"], "BUSINESS")
+        self.assertIn("BUSINESS", stocktake["supported_types"])
+
+        save_response = self.client.put(
+            "/api/erp-auth/data-permissions/resources/",
+            {
+                "resources": [
+                    {"code": item["code"], "permission_type": item["permission_type"]}
+                    for item in response.data
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(save_response.status_code, status.HTTP_200_OK, save_response.data)

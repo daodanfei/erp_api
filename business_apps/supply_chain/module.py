@@ -144,6 +144,7 @@ MODULE = ModuleDefinition(
         {"code": "supply_chain:purchase_return:complete", "name": "完成退货", "parent": "supply_chain:purchase_return"},
         {"code": "supply_chain:purchase_return:cancel", "name": "取消退货单", "parent": "supply_chain:purchase_return"},
         {"code": "supply_chain:alert:view", "name": "查看预警", "parent": "supply_chain:alert"},
+        {"code": "supply_chain:alert:scan", "name": "扫描库存预警", "parent": "supply_chain:alert"},
         {"code": "supply_chain:alert:resolve", "name": "处理预警", "parent": "supply_chain:alert"},
         {"code": "supply_chain:trace:view", "name": "查看追溯", "parent": "supply_chain:trace"},
     ),

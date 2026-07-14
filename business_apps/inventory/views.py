@@ -38,6 +38,14 @@ class ProductCategoryViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = ProductCategory.objects.all()
     serializer_class = ProductCategorySerializer
+    permission_map = {
+        'list': 'inventory:category:view',
+        'retrieve': 'inventory:category:view',
+        'create': 'inventory:category:create',
+        'update': 'inventory:category:update',
+        'partial_update': 'inventory:category:update',
+        'destroy': 'inventory:category:delete',
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset().order_by('sort', 'id')
@@ -86,6 +94,14 @@ class UnitViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = Unit.objects.all()
     serializer_class = UnitSerializer
+    permission_map = {
+        'list': 'inventory:unit:view',
+        'retrieve': 'inventory:unit:view',
+        'create': 'inventory:unit:create',
+        'update': 'inventory:unit:update',
+        'partial_update': 'inventory:unit:update',
+        'destroy': 'inventory:unit:delete',
+    }
 
     def get_queryset(self):
         return super().get_queryset().order_by("id")
@@ -247,19 +263,25 @@ class WarehouseViewSet(ModuleAwareModelViewSet):
         next_status = serializer.validated_data.get("status", warehouse.status)
         if warehouse.status and next_status is False:
             runtime_config = TenantService.get_runtime_config(self.request.user.tenant)
-            InventoryService.validate_warehouse_can_be_disabled(
-                warehouse=warehouse,
-                runtime_config=runtime_config,
-            )
+            try:
+                InventoryService.validate_warehouse_can_be_disabled(
+                    warehouse=warehouse,
+                    runtime_config=runtime_config,
+                )
+            except ValueError as exc:
+                raise ValidationError({"detail": str(exc)}) from exc
         validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
         serializer.save()
 
     def perform_destroy(self, instance):
         runtime_config = TenantService.get_runtime_config(self.request.user.tenant)
-        InventoryService.validate_warehouse_can_be_deleted(
-            warehouse=instance,
-            runtime_config=runtime_config,
-        )
+        try:
+            InventoryService.validate_warehouse_can_be_deleted(
+                warehouse=instance,
+                runtime_config=runtime_config,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         instance.delete()
 
 class InventoryViewSet(BaseBusinessViewSet):
@@ -269,6 +291,11 @@ class InventoryViewSet(BaseBusinessViewSet):
     filterset_fields = ['warehouse', 'product']
     dept_field = 'warehouse__manager__dept'
     user_field = 'warehouse__manager'
+    permission_map = {
+        'list': 'inventory:inventory:view',
+        'retrieve': 'inventory:inventory:view',
+        'adjust': 'inventory:inventory:adjust',
+    }
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -379,7 +406,10 @@ class StocktakeViewSet(ModuleAwareModelViewSet):
 
     def perform_create(self, serializer):
         policy = get_policy("inventory", user=self.request.user)
-        warehouse = policy.resolve_warehouse(serializer.validated_data.get("warehouse"))
+        try:
+            warehouse = policy.resolve_warehouse(serializer.validated_data.get("warehouse"))
+        except (ValueError, ObjectDoesNotExist) as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         stocktake = serializer.save(
             tenant=warehouse.tenant,
             warehouse=warehouse,

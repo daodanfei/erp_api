@@ -56,10 +56,10 @@ class ERPDepartmentViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet)
     permission_map = {
         "list": "system:dept",
         "retrieve": "system:dept",
-        "create": "system:dept",
-        "update": "system:dept",
-        "partial_update": "system:dept",
-        "destroy": "system:dept",
+        "create": "dept:create",
+        "update": "dept:update",
+        "partial_update": "dept:update",
+        "destroy": "dept:delete",
     }
 
     def get_queryset(self):
@@ -95,10 +95,10 @@ class ERPRoleViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     permission_map = {
         "list": "system:role",
         "retrieve": "system:role",
-        "create": "system:role",
-        "update": "system:role",
-        "partial_update": "system:role",
-        "destroy": "system:role",
+        "create": "role:create",
+        "update": "role:update",
+        "partial_update": "role:update",
+        "destroy": "role:delete",
     }
 
     def get_queryset(self):
@@ -118,7 +118,7 @@ class ERPRoleViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
 
 class ERPDataResourceView(APIView):
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
-    permission_map = {"get": "system:role", "put": "system:role"}
+    permission_map = {"get": "system:role", "put": "role:update"}
 
     def get(self, request):
         from .data_permissions import DATA_RESOURCES, get_special_options, resolve_permission_type, supported_permission_types
@@ -194,7 +194,7 @@ class ERPDataSpecialGrantViewSet(viewsets.ModelViewSet):
     serializer_class = ERPDataSpecialGrantSerializer
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     http_method_names = ["get", "post", "delete", "head", "options"]
-    permission_map = {"list": "system:role", "create": "system:role", "destroy": "system:role"}
+    permission_map = {"list": "system:role", "create": "role:update", "destroy": "role:update"}
 
     def get_queryset(self):
         queryset = ERPDataSpecialGrant.objects.filter(tenant=self.request.user.tenant).select_related(
@@ -209,13 +209,14 @@ class ERPUserViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     serializer_class = ERPUserSerializer
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     filterset_fields = ["tenant", "status", "must_change_password"]
-    http_method_names = ["get", "post", "put", "patch", "head", "options"]
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     permission_map = {
         "list": "system:user",
         "retrieve": "system:user",
         "create": "user:create",
         "update": "user:update",
         "partial_update": "user:update",
+        "destroy": "user:delete",
     }
 
     def get_queryset(self):
@@ -228,6 +229,14 @@ class ERPUserViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
         if self.action in {"create", "update", "partial_update"}:
             return ERPUserWriteSerializer
         return ERPUserSerializer
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.id == request.user.id:
+            raise ValidationError("不能删除当前登录用户")
+        if instance.roles.filter(is_system=True, data_scope="ALL", status=True).exists():
+            raise ValidationError("租户超级管理员不能删除")
+        return super().destroy(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

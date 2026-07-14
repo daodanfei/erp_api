@@ -515,6 +515,25 @@ class TenantApiTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("inventory", response.data["enabled_modules"])
 
+    def test_refresh_super_admin_permissions_resyncs_current_tenant_only(self):
+        tenant = Tenant.objects.create(code="tenant-refresh-a", name="Tenant Refresh A", status="ACTIVE")
+        other_tenant = Tenant.objects.create(code="tenant-refresh-b", name="Tenant Refresh B", status="ACTIVE")
+        TenantService.apply_blueprint_version(tenant=tenant, blueprint_version=self.version)
+        TenantService.apply_blueprint_version(tenant=other_tenant, blueprint_version=self.version)
+        admin_result = ERPUserProvisionService.ensure_tenant_super_admin(tenant=tenant)
+        other_admin_result = ERPUserProvisionService.ensure_tenant_super_admin(tenant=other_tenant)
+        admin_result.role.permissions.clear()
+        other_admin_result.role.permissions.clear()
+
+        response = self.client.post(f"/api/tenant/items/{tenant.id}/refresh-super-admin-permissions/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        admin_result.role.refresh_from_db()
+        other_admin_result.role.refresh_from_db()
+        self.assertGreater(admin_result.role.permissions.count(), 0)
+        self.assertEqual(other_admin_result.role.permissions.count(), 0)
+        self.assertEqual(response.data["role"]["permission_count"], admin_result.role.permissions.count())
+
     def test_runtime_config_endpoint_returns_instance_and_blueprint_context(self):
         tenant = Tenant.objects.create(code="tenant-c", name="Tenant C", status="ACTIVE")
         TenantConfigSnapshot.objects.create(

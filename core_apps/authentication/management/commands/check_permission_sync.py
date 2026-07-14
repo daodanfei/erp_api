@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from core_apps.authentication.models import Permission, Role
+from core_apps.erp_auth.services import sync_tenant_super_admin_role_permissions
 
 import seed_menu
 
@@ -19,17 +20,20 @@ class Command(BaseCommand):
         apply_changes = options["apply"]
         report = self._collect_report()
 
-        if self._is_synced(report):
+        if self._is_synced(report) and not apply_changes:
             self.stdout.write(self.style.SUCCESS(self._format_success(report)))
             return
 
-        self.stdout.write(self.style.WARNING(self._format_report(report)))
+        if not self._is_synced(report):
+            self.stdout.write(self.style.WARNING(self._format_report(report)))
 
         if not apply_changes:
             raise CommandError("模块 manifest 与数据库权限不同步，请执行 `python manage.py check_permission_sync --apply`。")
 
-        self.stdout.write("Applying permission sync via seed_menu.seed_data() ...")
+        self.stdout.write("Applying platform and ERP permission sync ...")
         seed_menu.seed_data()
+        synced_erp_roles = sync_tenant_super_admin_role_permissions()
+        self.stdout.write(f"ERP permission sync complete. tenant_super_admin_roles={synced_erp_roles}.")
         refreshed = self._collect_report()
 
         if not self._is_synced(refreshed):

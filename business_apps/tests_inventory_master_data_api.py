@@ -1,13 +1,17 @@
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import RequestFactory, TestCase
+from rest_framework.exceptions import ValidationError
+from rest_framework import status
+from rest_framework.test import APIRequestFactory
 
 from business_apps.inventory.models import Inventory, Product, ProductCategory, Unit
 from business_apps.inventory.services import InventoryService
 from business_apps.inventory.serializers import ProductCategorySerializer, ProductSerializer, StocktakeSerializer
 from business_apps.inventory.models import Stocktake, Warehouse
+from business_apps.inventory.views import StocktakeViewSet, WarehouseViewSet
 from business_apps.supply_chain.models import TransferOrder
 from business_apps.supply_chain.serializers import TransferOrderSerializer
 from business_apps.supply_chain.services import TransferService
@@ -186,6 +190,73 @@ class WarehouseGuardTest(TestCase):
                 warehouse=warehouse,
                 runtime_config=self._single_warehouse_runtime_config(tenant),
             )
+
+    def test_warehouse_destroy_returns_400_with_business_reason(self):
+        tenant = Tenant.objects.create(code="tenant-wh-api", name="Tenant WH API", status="ACTIVE")
+        category = ProductCategory.objects.create(tenant=tenant, name="仓库删除分类", status=True)
+        unit = Unit.objects.create(tenant=tenant, name="件", code="INV-UNIT-WH-DEL-001", status=True)
+        product = Product.objects.create(
+            tenant=tenant,
+            product_code="INV-WH-DEL-001",
+            name="仓库删除商品",
+            category=category,
+            unit=unit,
+            status="ACTIVE",
+        )
+        warehouse = Warehouse.objects.create(
+            tenant=tenant,
+            warehouse_code="WH-DELETE-001",
+            warehouse_name="历史仓库",
+            status=True,
+        )
+        Inventory.objects.create(
+            tenant=tenant,
+            warehouse=warehouse,
+            product=product,
+            current_qty=0,
+            locked_qty=0,
+        )
+        user = ERPUser.objects.create_user(
+            tenant=tenant,
+            username="warehouse_delete_user",
+            password="password",
+            must_change_password=False,
+        )
+        request = APIRequestFactory().delete(f"/api/inventory/warehouses/{warehouse.id}/")
+        request.user = user
+        request.tenant = tenant
+        view = WarehouseViewSet()
+        view.request = request
+        view.action = "destroy"
+
+        with patch("business_apps.inventory.views.TenantService.get_runtime_config", return_value=self._single_warehouse_runtime_config(tenant)):
+            with self.assertRaises(ValidationError) as exc:
+                view.perform_destroy(warehouse)
+
+        self.assertEqual(exc.exception.detail["detail"].code, "invalid")
+        self.assertEqual(str(exc.exception.detail["detail"]), "仓库已存在库存台账记录，不能删除")
+
+    def test_stocktake_create_returns_400_when_default_warehouse_unavailable(self):
+        tenant = Tenant.objects.create(code="tenant-stocktake-create", name="Tenant Stocktake Create", status="ACTIVE")
+        user = ERPUser.objects.create_user(
+            tenant=tenant,
+            username="stocktake_create_user",
+            password="password",
+            must_change_password=False,
+        )
+        serializer = Mock()
+        serializer.validated_data = {"warehouse": None}
+        stocktake_view = StocktakeViewSet()
+        stocktake_view.request = SimpleNamespace(user=user)
+
+        fake_policy = Mock()
+        fake_policy.resolve_warehouse.side_effect = ValueError("未找到可用默认仓库，请先配置仓库")
+
+        with patch("business_apps.inventory.views.get_policy", return_value=fake_policy):
+            with self.assertRaises(ValidationError) as exc:
+                stocktake_view.perform_create(serializer)
+
+        self.assertEqual(str(exc.exception.detail["detail"]), "未找到可用默认仓库，请先配置仓库")
 
 
 class TransferOrderQuantityValidationTest(TestCase):

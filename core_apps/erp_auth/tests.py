@@ -854,6 +854,22 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertFalse(any(code.startswith("platform:dict") for code in permission_codes))
         self.assertFalse(any(code.startswith("platform:coderule") for code in permission_codes))
 
+    def test_permission_list_includes_department_and_role_button_permissions(self):
+        self.login()
+
+        response = self.client.get("/api/erp-auth/permissions/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permission_codes = {item["code"] for item in response.data}
+        self.assertTrue({
+            "dept:create",
+            "dept:update",
+            "dept:delete",
+            "role:create",
+            "role:update",
+            "role:delete",
+        }.issubset(permission_codes))
+
     def test_system_feature_flags_filter_permissions_and_api_access(self):
         limited_version = SystemBlueprintVersion.objects.create(
             blueprint=self.blueprint,
@@ -922,6 +938,28 @@ class ERPUserManagementApiTest(APITestCase):
 
         self.assertEqual(limit_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("租户用户数已达上限", str(limit_response.data))
+
+    def test_delete_user_requires_permission_and_keeps_super_admin(self):
+        self.tenant.user_limit = 3
+        self.tenant.save(update_fields=["user_limit"])
+        staff_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="operator",
+            password="operator-123",
+            name="操作员",
+        )
+        staff_user.roles.add(self.staff_role)
+        self.login()
+
+        delete_response = self.client.delete(f"/api/erp-auth/users/{staff_user.id}/")
+
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(ERPUser.objects.filter(id=staff_user.id).exists())
+
+        super_admin_response = self.client.delete(f"/api/erp-auth/users/{self.erp_user.id}/")
+
+        self.assertEqual(super_admin_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(ERPUser.objects.filter(id=self.erp_user.id).exists())
 
     def test_create_user_can_assign_super_admin_role(self):
         self.tenant.user_limit = 3

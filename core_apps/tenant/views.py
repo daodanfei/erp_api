@@ -151,6 +151,32 @@ class TenantViewSet(viewsets.ModelViewSet):
             }
         )
 
+    @decorators.action(detail=True, methods=["post"], url_path="refresh-super-admin-permissions")
+    def refresh_super_admin_permissions(self, request, pk=None):
+        tenant = self.get_object()
+        provision_result = ERPUserProvisionService.ensure_tenant_super_admin(tenant=tenant)
+        role = provision_result.role
+        permission_count = role.permissions.count()
+        return response.Response(
+            {
+                "tenant": self.get_serializer(tenant).data,
+                "user": {
+                    "id": provision_result.user.id,
+                    "username": provision_result.user.username,
+                    "name": provision_result.user.name,
+                    "status": provision_result.user.status,
+                    "must_change_password": provision_result.user.must_change_password,
+                },
+                "role": {
+                    "id": role.id,
+                    "name": role.name,
+                    "code": role.code,
+                    "permission_count": permission_count,
+                },
+                "created": provision_result.created,
+            }
+        )
+
     @decorators.action(detail=True, methods=["post"], url_path="clear-data")
     def clear_data(self, request, pk=None):
         tenant = self.get_object()

@@ -31,9 +31,15 @@ SYSTEM_FEATURE_PERMISSION_CODES = {
     },
     "department_management": {
         "system:dept",
+        "dept:create",
+        "dept:update",
+        "dept:delete",
     },
     "role_management": {
         "system:role",
+        "role:create",
+        "role:update",
+        "role:delete",
     },
     "operation_log": {
         "system:log",
@@ -163,6 +169,27 @@ def sync_erp_permissions() -> dict[str, ERPPermission]:
             erp_permission.save(update_fields=["parent"])
 
     return synced
+
+
+@transaction.atomic
+def sync_tenant_super_admin_role_permissions() -> int:
+    """Sync ERP manifests and refresh every tenant system role permission set."""
+    permission_map = sync_erp_permissions()
+    roles = ERPRole.objects.filter(
+        is_system=True,
+        status=True,
+        data_scope="ALL",
+    ).select_related("tenant")
+    synced_roles = 0
+    for role in roles:
+        enabled_codes = get_enabled_erp_permission_codes(tenant=role.tenant)
+        role.permissions.set([
+            permission
+            for code, permission in permission_map.items()
+            if code in enabled_codes and permission.status
+        ])
+        synced_roles += 1
+    return synced_roles
 
 
 @dataclass(frozen=True, slots=True)

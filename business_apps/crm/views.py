@@ -212,6 +212,13 @@ class ContactViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = Contact.objects.all()
     serializer_class = ContactSerializer
+    permission_map = {
+        'list': 'crm:customer:view',
+        'retrieve': 'crm:customer:view',
+        'create': 'crm:contact:create',
+        'update': 'crm:contact:update',
+        'destroy': 'crm:contact:delete',
+    }
 
     def perform_create(self, serializer):
         customer = serializer.validated_data['customer']

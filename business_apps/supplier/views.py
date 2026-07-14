@@ -213,6 +213,13 @@ class SupplierContactViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY
     queryset = SupplierContact.objects.all()
     serializer_class = SupplierContactSerializer
+    permission_map = {
+        'list': 'supplier:supplier:view',
+        'retrieve': 'supplier:supplier:view',
+        'create': 'supplier:contact:create',
+        'update': 'supplier:contact:update',
+        'destroy': 'supplier:contact:delete',
+    }
 
 class SupplierFollowRecordViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY

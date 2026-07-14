@@ -168,6 +168,25 @@ class PermissionSyncCommandTest(APITestCase):
 
         self.assertIn("Permission sync OK", stdout.getvalue())
 
+    def test_check_permission_sync_apply_also_refreshes_erp_permissions(self):
+        self.admin_role.permissions.add(self.platform_permission)
+        stdout = StringIO()
+
+        with patch(
+            "core_apps.authentication.management.commands.check_permission_sync.Command._load_defined_codes",
+            return_value={self.platform_permission.code},
+        ), patch(
+            "core_apps.authentication.management.commands.check_permission_sync.Command._load_platform_admin_codes",
+            return_value={self.platform_permission.code},
+        ), patch("seed_menu.seed_data"), patch(
+            "core_apps.authentication.management.commands.check_permission_sync.sync_tenant_super_admin_role_permissions",
+            return_value=2,
+        ) as sync_erp:
+            call_command("check_permission_sync", "--apply", stdout=stdout)
+
+        sync_erp.assert_called_once_with()
+        self.assertIn("tenant_super_admin_roles=2", stdout.getvalue())
+
 
 class RoleApiTest(APITestCase):
     def setUp(self):

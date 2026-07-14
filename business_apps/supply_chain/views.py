@@ -471,7 +471,7 @@ class InventoryAlertViewSet(BaseBusinessViewSet):
         'list': 'supply_chain:alert:view',
         'retrieve': 'supply_chain:alert:view',
         'resolve': 'supply_chain:alert:resolve',
-        'scan': 'supply_chain:alert:view',
+        'scan': 'supply_chain:alert:scan',
     }
 
     @action(detail=True, methods=['post'])

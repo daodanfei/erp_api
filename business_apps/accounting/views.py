@@ -43,6 +43,13 @@ class AccountSubjectViewSet(ModuleAwareModelViewSet):
         serializer = self.get_serializer(subjects, many=True)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    def perform_create(self, serializer):
+        validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
+        serializer.save(
+            code=serializer.validated_data.get("code") or SubjectInitService.generate_subject_code(tenant=self.request.user.tenant),
+            tenant=self.request.user.tenant,
+        )
+
     def perform_update(self, serializer):
         policy = get_policy("accounting", user=self.request.user)
         if not policy.subject_editable_after_init() and self.get_queryset().exists():

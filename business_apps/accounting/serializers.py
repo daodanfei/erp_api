@@ -17,6 +17,10 @@ class AccountSubjectSerializer(serializers.ModelSerializer):
         model = AccountSubject
         fields = "__all__"
         read_only_fields = ("tenant", "created_by", "created_at", "updated_at")
+        extra_kwargs = {
+            "code": {"required": False},
+        }
+        validators = []
 
 
 class AccountingPeriodSerializer(serializers.ModelSerializer):

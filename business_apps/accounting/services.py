@@ -120,6 +120,17 @@ class SubjectInitService:
                 created_subjects.append(subject)
         return created_subjects
 
+    @staticmethod
+    def generate_subject_code(*, tenant=None) -> str:
+        tenant_subjects = AccountSubject.objects.filter(tenant=tenant, code__startswith="SUBJ")
+        existing_codes = tenant_subjects.values_list("code", flat=True)
+        next_sequence = 1
+        for code in existing_codes:
+            suffix = code.removeprefix("SUBJ")
+            if suffix.isdigit():
+                next_sequence = max(next_sequence, int(suffix) + 1)
+        return f"SUBJ{next_sequence:04d}"
+
 
 class VoucherService:
     @staticmethod

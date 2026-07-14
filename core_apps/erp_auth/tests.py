@@ -1882,6 +1882,27 @@ class ERPAccountingIsolationApiTest(APITestCase):
         self.assertEqual(self.subject.tenant_id, self.tenant.id)
         self.assertEqual(self.subject.name, "Tenant A 科目-更新")
 
+    def test_account_subject_create_auto_generates_hidden_code(self):
+        self.login()
+
+        response = self.client.post(
+            "/api/accounting/subjects/",
+            {
+                "name": "手工新增科目",
+                "category": "ASSET",
+                "balance_direction": "DEBIT",
+                "level": 1,
+                "is_leaf": True,
+                "enabled": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        created = AccountSubject.objects.get(id=response.data["id"])
+        self.assertEqual(created.tenant_id, self.tenant.id)
+        self.assertTrue(created.code.startswith("SUBJ"))
+
 
 class ERPUserMasterDataApiTest(APITestCase):
     def setUp(self):

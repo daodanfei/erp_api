@@ -16,6 +16,20 @@ class CashAccountSerializer(serializers.ModelSerializer):
         model = CashAccount
         fields = '__all__'
 
+
+class CashAccountReferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CashAccount
+        fields = (
+            "id",
+            "name",
+            "type",
+            "account_type",
+            "currency",
+            "status",
+        )
+
+
 class FinancialSnapshotSerializer(serializers.ModelSerializer):
     class Meta:
         model = FinancialSnapshot

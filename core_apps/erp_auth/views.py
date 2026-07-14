@@ -21,6 +21,7 @@ from .serializers import (
     ERPLoginSerializer,
     ERPPermissionSerializer,
     ERPRoleSerializer,
+    ERPUserReferenceSerializer,
     ERPTokenRefreshSerializer,
     ERPUserSerializer,
     ERPUserWriteSerializer,
@@ -46,7 +47,7 @@ class ERPPermissionViewSet(viewsets.ReadOnlyModelViewSet):
         if not isinstance(self.request.user, ERPUser):
             return queryset.none()
         enabled_codes = get_enabled_erp_permission_codes(tenant=self.request.user.tenant)
-        return queryset.filter(code__in=enabled_codes).order_by("order", "id")
+        return queryset.filter(code__in=enabled_codes).exclude(code__endswith=":reference").order_by("order", "id")
 
 
 class ERPDepartmentViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
@@ -213,6 +214,7 @@ class ERPUserViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     permission_map = {
         "list": "system:user",
         "retrieve": "system:user",
+        "reference_options": "system:user:reference",
         "create": "user:create",
         "update": "user:update",
         "partial_update": "user:update",
@@ -226,9 +228,17 @@ class ERPUserViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
         return queryset
 
     def get_serializer_class(self):
+        if self.action == "reference_options":
+            return ERPUserReferenceSerializer
         if self.action in {"create", "update", "partial_update"}:
             return ERPUserWriteSerializer
         return ERPUserSerializer
+
+    @action(detail=False, methods=["get"], url_path="reference-options")
+    def reference_options(self, request):
+        queryset = self.get_queryset().filter(status=True).order_by("username", "id")
+        serializer = self.get_serializer(queryset, many=True)
+        return response.Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

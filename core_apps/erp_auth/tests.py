@@ -15,7 +15,7 @@ from business_apps.accounting.models import AccountSubject
 from business_apps.accounting.services import SubjectInitService
 from business_apps.crm.models import Customer, CustomerAttachment, FollowRecord
 from business_apps.finance.models import CashAccount
-from business_apps.inventory.models import InventoryTransaction, Product, ProductCategory, Unit, Warehouse
+from business_apps.inventory.models import Inventory, InventoryTransaction, Product, ProductCategory, Unit, Warehouse
 from business_apps.platform.models import DictItem, DictType, File
 from business_apps.inventory.services import InventoryService
 from business_apps.purchase.services import PurchaseOrderService
@@ -25,11 +25,11 @@ from business_apps.supply_chain.services import OutboundService
 from business_apps.supplier.models import Supplier, SupplierAttachment, SupplierEvaluation, SupplierFollowRecord
 from core_apps.authentication.models import Permission, User
 from core_apps.blueprints.models import SystemBlueprint, SystemBlueprintVersion, SystemInstance
-from core_apps.tenant.models import Tenant
+from core_apps.tenant.models import Tenant, TenantModuleState
 from core_apps.tenant.services import TenantService
 
 from .models import ERPDepartment, ERPPermission, ERPRole, ERPUser
-from .services import ERPUserProvisionService
+from .services import ERPUserProvisionService, sync_role_reference_permissions
 
 
 def build_system_module_config(**feature_overrides):
@@ -843,6 +843,238 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(ERPRole.objects.filter(id=created_role.id).exists())
 
+    def test_role_save_auto_adds_configured_reference_permissions(self):
+        self.login()
+        warehouse_create = ERPPermission.objects.get(code="inventory:warehouse:create")
+        user_reference = ERPPermission.objects.get(code="system:user:reference")
+
+        create_response = self.client.post(
+            "/api/erp-auth/roles/",
+            {
+                "name": "仓库维护",
+                "data_scope": "DEPARTMENT",
+                "status": True,
+                "permission_ids": [warehouse_create.id],
+            },
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        created_role = ERPRole.objects.get(tenant=self.tenant, name="仓库维护")
+        self.assertEqual(
+            set(created_role.permissions.values_list("code", flat=True)),
+            {"inventory:warehouse:create", "system:user:reference"},
+        )
+
+        update_response = self.client.put(
+            f"/api/erp-auth/roles/{created_role.id}/",
+            {
+                "name": "仓库维护",
+                "data_scope": "DEPARTMENT",
+                "status": True,
+                "permission_ids": [],
+            },
+            format="json",
+        )
+
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        created_role.refresh_from_db()
+        self.assertFalse(created_role.permissions.filter(id=user_reference.id).exists())
+
+    def test_sync_role_reference_permissions_updates_existing_roles(self):
+        warehouse_create = ERPPermission.objects.get(code="inventory:warehouse:create")
+        user_reference = ERPPermission.objects.get(code="system:user:reference")
+        self.staff_role.permissions.set([warehouse_create])
+
+        synced_count = sync_role_reference_permissions(tenant=self.tenant)
+
+        self.assertEqual(synced_count, 1)
+        self.staff_role.refresh_from_db()
+        self.assertEqual(
+            set(self.staff_role.permissions.values_list("code", flat=True)),
+            {"inventory:warehouse:create", "system:user:reference"},
+        )
+        self.assertTrue(self.staff_role.permissions.filter(id=user_reference.id).exists())
+
+    def test_user_reference_options_uses_reference_permission_only(self):
+        user_reference = ERPPermission.objects.get(code="system:user:reference")
+        self.staff_role.permissions.set([user_reference])
+        ref_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="warehouse_keeper",
+            password="password123",
+            dept=self.active_department,
+            name="仓库员",
+            phone="13800000000",
+            email="keeper@example.com",
+            status=True,
+        )
+        ref_user.roles.add(self.staff_role)
+        other_tenant = Tenant.objects.create(
+            code="erp-reference-other",
+            name="ERP Reference Other",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        ERPUser.objects.create_user(
+            tenant=other_tenant,
+            username="other_tenant_user",
+            password="password123",
+            status=True,
+        )
+        self.client.force_authenticate(ref_user)
+
+        list_response = self.client.get("/api/erp-auth/users/")
+        reference_response = self.client.get("/api/erp-auth/users/reference-options/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(reference_response.status_code, status.HTTP_200_OK)
+        usernames = {item["username"] for item in reference_response.data}
+        self.assertIn("warehouse_keeper", usernames)
+        self.assertNotIn("other_tenant_user", usernames)
+        returned_user = next(item for item in reference_response.data if item["username"] == "warehouse_keeper")
+        self.assertEqual(
+            set(returned_user.keys()),
+            {"id", "username", "name", "dept", "dept_name"},
+        )
+
+    def test_inventory_reference_options_use_reference_permissions_only(self):
+        category_reference = ERPPermission.objects.get(code="inventory:category:reference")
+        unit_reference = ERPPermission.objects.get(code="inventory:unit:reference")
+        product_reference = ERPPermission.objects.get(code="inventory:product:reference")
+        warehouse_reference = ERPPermission.objects.get(code="inventory:warehouse:reference")
+        inventory_reference = ERPPermission.objects.get(code="inventory:inventory:reference")
+        self.staff_role.permissions.set([
+            category_reference,
+            unit_reference,
+            product_reference,
+            warehouse_reference,
+            inventory_reference,
+        ])
+        ref_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="inventory_ref_user",
+            password="password123",
+            dept=self.active_department,
+            status=True,
+        )
+        ref_user.roles.add(self.staff_role)
+        category = ProductCategory.objects.create(tenant=self.tenant, name="引用分类", status=True)
+        unit = Unit.objects.create(tenant=self.tenant, name="个", code="REF-U", status=True)
+        Product.objects.create(
+            tenant=self.tenant,
+            product_code="REF-P",
+            name="引用商品",
+            category=category,
+            unit=unit,
+            status="ACTIVE",
+            created_by=ref_user,
+            dept=self.active_department,
+        )
+        Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="REF-W",
+            warehouse_name="引用仓库",
+            status=True,
+            manager=ref_user,
+        )
+        self.client.force_authenticate(ref_user)
+
+        for list_path, reference_path, expected_name in (
+            ("/api/inventory/categories/", "/api/inventory/categories/reference-options/", "引用分类"),
+            ("/api/inventory/units/", "/api/inventory/units/reference-options/", "个"),
+            ("/api/inventory/products/", "/api/inventory/products/reference-options/", "引用商品"),
+            ("/api/inventory/warehouses/", "/api/inventory/warehouses/reference-options/", "引用仓库"),
+        ):
+            list_response = self.client.get(list_path)
+            reference_response = self.client.get(reference_path)
+
+            self.assertEqual(list_response.status_code, status.HTTP_403_FORBIDDEN)
+            self.assertEqual(reference_response.status_code, status.HTTP_200_OK)
+            names = {
+                item.get("name") or item.get("warehouse_name")
+                for item in reference_response.data
+            }
+            self.assertIn(expected_name, names)
+
+        inventory = Inventory.objects.create(
+            tenant=self.tenant,
+            warehouse=Warehouse.objects.get(warehouse_code="REF-W"),
+            product=Product.objects.get(product_code="REF-P"),
+            current_qty=12,
+            locked_qty=2,
+        )
+        inventory_list = self.client.get("/api/inventory/inventories/")
+        inventory_reference = self.client.get(
+            "/api/inventory/inventories/reference-options/",
+            {"warehouse": inventory.warehouse_id, "product": inventory.product_id},
+        )
+        self.assertEqual(inventory_list.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(inventory_reference.status_code, status.HTTP_200_OK)
+        self.assertEqual(inventory_reference.data, [{
+            "warehouse": inventory.warehouse_id,
+            "product": inventory.product_id,
+            "current_qty": "12.000",
+            "available_qty": Decimal("10.000"),
+            "sellable_qty": Decimal("12.000"),
+        }])
+
+    def test_supplier_reference_options_ignore_role_data_scope(self):
+        TenantModuleState.objects.update_or_create(
+            tenant=self.tenant,
+            module_key="supplier",
+            defaults={"enabled": True},
+        )
+        supplier_reference, _ = ERPPermission.objects.get_or_create(
+            code="supplier:supplier:reference",
+            defaults={"name": "引用供应商", "type": "BUTTON"},
+        )
+        self.staff_role.permissions.set([supplier_reference])
+        ref_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="supplier_ref_user",
+            password="password123",
+            dept=self.active_department,
+            status=True,
+        )
+        ref_user.roles.add(self.staff_role)
+        owner_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="supplier_owner",
+            password="password123",
+            dept=self.active_department,
+            status=True,
+        )
+        Supplier.objects.create(
+            tenant=self.tenant,
+            supplier_code="SUP-REF-OWNED-BY-OTHER",
+            supplier_name="其他负责人供应商",
+            status="ACTIVE",
+            owner=owner_user,
+        )
+        other_tenant = Tenant.objects.create(
+            code="supplier-ref-other",
+            name="Supplier Reference Other",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        Supplier.objects.create(
+            tenant=other_tenant,
+            supplier_code="SUP-REF-OTHER-TENANT",
+            supplier_name="其他租户供应商",
+            status="ACTIVE",
+        )
+        self.client.force_authenticate(ref_user)
+
+        list_response = self.client.get("/api/supplier/suppliers/")
+        reference_response = self.client.get("/api/supplier/suppliers/reference-options/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(reference_response.status_code, status.HTTP_200_OK)
+        supplier_names = {item["supplier_name"] for item in reference_response.data}
+        self.assertIn("其他负责人供应商", supplier_names)
+        self.assertNotIn("其他租户供应商", supplier_names)
+
     def test_permission_list_hides_doc_marked_pages_for_erp(self):
         self.login()
 
@@ -869,6 +1101,17 @@ class ERPUserManagementApiTest(APITestCase):
             "role:update",
             "role:delete",
         }.issubset(permission_codes))
+
+    def test_permission_list_hides_reference_permissions_for_role_management(self):
+        self.login()
+
+        response = self.client.get("/api/erp-auth/permissions/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permission_codes = {item["code"] for item in response.data}
+        self.assertFalse(any(code.endswith(":reference") for code in permission_codes))
+        self.assertNotIn("system:user:reference", permission_codes)
+        self.assertNotIn("inventory:warehouse:reference", permission_codes)
 
     def test_system_feature_flags_filter_permissions_and_api_access(self):
         limited_version = SystemBlueprintVersion.objects.create(

@@ -42,6 +42,23 @@ class SupplierSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ('supplier_code', 'owner', 'dept', 'created_by', 'is_deleted', 'deleted_at', 'deleted_by')
 
+
+class SupplierReferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Supplier
+        fields = (
+            "id",
+            "supplier_code",
+            "supplier_name",
+            "short_name",
+            "status",
+            "tax_rate",
+            "payment_term",
+            "default_payment_method",
+            "settlement_cycle",
+        )
+
+
 class SupplierTransferLogSerializer(serializers.ModelSerializer):
     old_owner_name = serializers.CharField(source='old_owner.username', read_only=True)
     new_owner_name = serializers.CharField(source='new_owner.username', read_only=True)

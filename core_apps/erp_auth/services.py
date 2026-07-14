@@ -25,12 +25,14 @@ ERP_DEFAULT_HIDDEN_PERMISSION_PREFIXES = (
 SYSTEM_FEATURE_PERMISSION_CODES = {
     "user_management": {
         "system:user",
+        "system:user:reference",
         "user:create",
         "user:update",
         "user:delete",
     },
     "department_management": {
         "system:dept",
+        "system:dept:reference",
         "dept:create",
         "dept:update",
         "dept:delete",
@@ -171,6 +173,60 @@ def sync_erp_permissions() -> dict[str, ERPPermission]:
     return synced
 
 
+def get_permission_dependency_codes(*, tenant, permission_codes: set[str]) -> set[str]:
+    """Return extra permissions implied by the system-level dependency rules."""
+    if not permission_codes:
+        return set()
+
+    from .permission_dependencies import ERP_PERMISSION_DEPENDENCIES
+
+    enabled_codes = get_enabled_erp_permission_codes(tenant=tenant)
+    resolved = set(permission_codes)
+    queue = list(permission_codes)
+    while queue:
+        trigger_code = queue.pop(0)
+        for required_code in ERP_PERMISSION_DEPENDENCIES.get(trigger_code, ()):
+            if required_code in resolved or required_code not in enabled_codes:
+                continue
+            resolved.add(required_code)
+            queue.append(required_code)
+    return resolved - permission_codes
+
+
+def expand_permission_ids_with_dependencies(*, tenant, permission_ids: list[int]) -> list[int]:
+    if not permission_ids:
+        return permission_ids
+    permissions = list(ERPPermission.objects.filter(id__in=permission_ids))
+    code_by_id = {permission.id: permission.code for permission in permissions}
+    selected_codes = {code_by_id[permission_id] for permission_id in permission_ids if permission_id in code_by_id}
+    dependency_codes = get_permission_dependency_codes(tenant=tenant, permission_codes=selected_codes)
+    if not dependency_codes:
+        return permission_ids
+    dependency_ids = list(
+        ERPPermission.objects.filter(code__in=dependency_codes, status=True).values_list("id", flat=True)
+    )
+    return list(dict.fromkeys([*permission_ids, *dependency_ids]))
+
+
+@transaction.atomic
+def sync_role_reference_permissions(*, tenant=None) -> int:
+    """Add system-level reference permissions to existing non-system roles."""
+    sync_erp_permissions()
+    roles = ERPRole.objects.filter(is_system=False, status=True).select_related("tenant").prefetch_related("permissions")
+    if tenant is not None:
+        roles = roles.filter(tenant=tenant)
+
+    synced_roles = 0
+    for role in roles:
+        current_ids = list(role.permissions.values_list("id", flat=True))
+        expanded_ids = expand_permission_ids_with_dependencies(tenant=role.tenant, permission_ids=current_ids)
+        if set(expanded_ids) == set(current_ids):
+            continue
+        role.permissions.set(ERPPermission.objects.filter(id__in=expanded_ids))
+        synced_roles += 1
+    return synced_roles
+
+
 @transaction.atomic
 def sync_tenant_super_admin_role_permissions() -> int:
     """Sync ERP manifests and refresh every tenant system role permission set."""
@@ -189,6 +245,7 @@ def sync_tenant_super_admin_role_permissions() -> int:
             if code in enabled_codes and permission.status
         ])
         synced_roles += 1
+    sync_role_reference_permissions()
     return synced_roles
 
 

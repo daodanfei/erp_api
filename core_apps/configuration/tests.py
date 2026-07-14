@@ -1,5 +1,9 @@
 from django.test import SimpleTestCase
 from rest_framework import serializers
+from rest_framework import status
+from rest_framework.test import APITestCase
+
+from core_apps.authentication.models import User
 
 from .validators import validate_blueprint_config
 
@@ -100,6 +104,31 @@ class ConfigurationValidationTest(SimpleTestCase):
         self.assertIn("system", result["module_configs"])
         self.assertIn("multi_warehouse", result["module_configs"]["inventory"]["features"])
         self.assertEqual(result["module_configs"]["inventory"]["defaults"]["default_warehouse_code"], "MAIN")
+
+    def test_validate_blueprint_config_strips_permission_dependencies_from_legacy_snapshots(self):
+        result = validate_blueprint_config(
+            {
+                "basic": {
+                    "name": "legacy_reference_dependencies",
+                    "industry": "trade",
+                    "mode": "saas",
+                },
+                "enabled_modules": ["inventory"],
+                "module_configs": {
+                    "inventory": {
+                        "features": {},
+                        "workflows": {},
+                        "field_rules": {},
+                        "defaults": {},
+                        "permission_dependencies": {
+                            "inventory:warehouse:create": ["system:user:reference"],
+                        },
+                    }
+                },
+            }
+        )
+
+        self.assertNotIn("permission_dependencies", result["module_configs"]["inventory"])
 
     def test_validate_blueprint_config_merges_known_module_template_sections(self):
         result = validate_blueprint_config(
@@ -328,4 +357,25 @@ class ConfigurationValidationTest(SimpleTestCase):
         self.assertEqual(
             inventory_rules["purchase_order_item.warehouse"],
             {"visible": False, "required": False, "readonly": True},
+        )
+
+
+class ConfigurationPermissionDependencyApiTest(APITestCase):
+    def test_permission_dependency_endpoint_returns_system_level_reference_rules(self):
+        user = User.objects.create_user(username="platform_config_admin", password="password")
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get("/api/configuration/permission-dependencies/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        dependency_by_trigger = {
+            item["trigger_code"]: item
+            for item in response.data
+        }
+        self.assertIn("inventory:warehouse:create", dependency_by_trigger)
+        warehouse_dependency = dependency_by_trigger["inventory:warehouse:create"]
+        self.assertEqual(warehouse_dependency["trigger_name"], "创建仓库")
+        self.assertIn(
+            {"code": "system:user:reference", "name": "引用用户"},
+            warehouse_dependency["required_permissions"],
         )

@@ -122,24 +122,22 @@ class TenantDataPermissionTypeTest(TestCase):
 
         self.assertSetEqual(set(self._query(WarehouseViewSet)), {first, second})
 
-    def test_reference_visibility_equals_view_visibility(self):
+    def test_related_reference_validation_ignores_role_data_scope_but_keeps_tenant_boundary(self):
         warehouse = Warehouse.objects.create(
             tenant=self.tenant, warehouse_code="WH-REFERENCE", warehouse_name="引用仓"
-        )
-        with self.assertRaises(ValidationError):
-            validate_erp_related_tenant_scope(
-                PurchaseReceipt, validated_data={"warehouse": warehouse}, user=self.manager
-            )
-
-        ERPDataSpecialGrant.objects.create(
-            tenant=self.tenant,
-            resource_code="inventory.warehouse",
-            object_id=str(warehouse.id),
-            user=self.manager,
         )
         validate_erp_related_tenant_scope(
             PurchaseReceipt, validated_data={"warehouse": warehouse}, user=self.manager
         )
+
+        other_tenant = Tenant.objects.create(code="scope-other", name="Scope Other")
+        other_warehouse = Warehouse.objects.create(
+            tenant=other_tenant, warehouse_code="WH-OTHER", warehouse_name="其他租户仓"
+        )
+        with self.assertRaises(ValidationError):
+            validate_erp_related_tenant_scope(
+                PurchaseReceipt, validated_data={"warehouse": other_warehouse}, user=self.manager
+            )
 
 
 class TenantDataPermissionConfigApiTest(APITestCase):

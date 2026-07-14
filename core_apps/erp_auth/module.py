@@ -62,9 +62,11 @@ MODULE = ModuleDefinition(
         },
     ),
     permissions=(
+        {"code": "system:user:reference", "name": "引用用户", "parent": "system:user"},
         {"code": "user:create", "name": "新增用户", "parent": "system:user"},
         {"code": "user:update", "name": "编辑用户", "parent": "system:user"},
         {"code": "user:delete", "name": "删除用户", "parent": "system:user"},
+        {"code": "system:dept:reference", "name": "引用部门", "parent": "system:dept"},
         {"code": "dept:create", "name": "新增部门", "parent": "system:dept"},
         {"code": "dept:update", "name": "编辑部门", "parent": "system:dept"},
         {"code": "dept:delete", "name": "删除部门", "parent": "system:dept"},

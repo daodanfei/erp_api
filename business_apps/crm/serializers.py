@@ -34,6 +34,24 @@ class CustomerSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ('customer_code', 'owner', 'dept', 'created_by', 'is_deleted', 'deleted_at', 'deleted_by')
 
+
+class CustomerReferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Customer
+        fields = (
+            "id",
+            "customer_code",
+            "customer_name",
+            "short_name",
+            "status",
+            "payment_term",
+            "default_payment_method",
+            "credit_control_mode",
+            "credit_limit",
+            "current_balance",
+        )
+
+
 class TransferLogSerializer(serializers.ModelSerializer):
     old_owner_name = serializers.CharField(source='old_owner.username', read_only=True)
     new_owner_name = serializers.CharField(source='new_owner.username', read_only=True)

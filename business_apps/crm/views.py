@@ -13,6 +13,7 @@ from core_apps.policies.registry import get_policy
 from .models import Customer, Contact, FollowRecord, CustomerTag, CustomerAttachment, TransferLog
 from .serializers import (
     CustomerSerializer, ContactSerializer, FollowRecordSerializer, 
+    CustomerReferenceSerializer,
     CustomerTagSerializer, CustomerAttachmentSerializer, TransferLogSerializer
 )
 from .services import generate_customer_code, check_duplicate, transfer_customer
@@ -30,6 +31,7 @@ class CustomerViewSet(BaseBusinessViewSet):
     permission_map = {
         'list': 'crm:customer:view',
         'retrieve': 'crm:customer:view',
+        'reference_options': 'crm:customer:reference',
         'create': 'crm:customer:create',
         'update': 'crm:customer:update',
         'destroy': 'crm:customer:delete',
@@ -39,6 +41,17 @@ class CustomerViewSet(BaseBusinessViewSet):
     }
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['status']
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return CustomerReferenceSerializer
+        return CustomerSerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.filter_queryset(self.get_queryset()).filter(status='ACTIVE')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         policy = get_policy("crm", user=self.request.user)

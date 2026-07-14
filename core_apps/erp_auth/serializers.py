@@ -4,7 +4,12 @@ from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 from .models import ERPDataSpecialGrant, ERPDepartment, ERPPermission, ERPRole, ERPUser
-from .services import ERPUserProvisionService, generate_erp_role_code, get_enabled_erp_permission_codes
+from .services import (
+    ERPUserProvisionService,
+    expand_permission_ids_with_dependencies,
+    generate_erp_role_code,
+    get_enabled_erp_permission_codes,
+)
 from .tokens import ERPRefreshToken
 
 
@@ -116,16 +121,19 @@ class ERPRoleSerializer(serializers.ModelSerializer):
             **validated_data,
         )
         if permission_ids is not None:
+            permission_ids = expand_permission_ids_with_dependencies(tenant=tenant, permission_ids=permission_ids)
             role.permissions.set(ERPPermission.objects.filter(id__in=permission_ids))
         return role
 
     def update(self, instance, validated_data):
+        tenant = self.context["request"].user.tenant
         permission_ids = validated_data.pop("permission_ids", None)
         for field_name, field_value in validated_data.items():
             setattr(instance, field_name, field_value)
         if validated_data:
             instance.save(update_fields=list(validated_data.keys()))
         if permission_ids is not None:
+            permission_ids = expand_permission_ids_with_dependencies(tenant=tenant, permission_ids=permission_ids)
             instance.permissions.set(ERPPermission.objects.filter(id__in=permission_ids))
         return instance
 
@@ -212,6 +220,20 @@ class ERPUserSerializer(serializers.ModelSerializer):
 
     def get_role_ids(self, obj):
         return list(obj.roles.values_list("id", flat=True))
+
+
+class ERPUserReferenceSerializer(serializers.ModelSerializer):
+    dept_name = serializers.CharField(source="dept.name", read_only=True)
+
+    class Meta:
+        model = ERPUser
+        fields = (
+            "id",
+            "username",
+            "name",
+            "dept",
+            "dept_name",
+        )
 
 
 class ERPUserWriteSerializer(serializers.ModelSerializer):

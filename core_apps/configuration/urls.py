@@ -1,9 +1,10 @@
 from django.urls import path
 
-from .views import ConfigurationModuleCatalogView, ConfigurationValidationView
+from .views import ConfigurationModuleCatalogView, ConfigurationPermissionDependencyView, ConfigurationValidationView
 
 
 urlpatterns = [
     path("validate/", ConfigurationValidationView.as_view()),
     path("modules/", ConfigurationModuleCatalogView.as_view()),
+    path("permission-dependencies/", ConfigurationPermissionDependencyView.as_view()),
 ]

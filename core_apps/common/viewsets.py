@@ -76,32 +76,6 @@ def validate_erp_related_tenant_scope(model, *, validated_data: dict, user) -> N
         related_tenant_id = getattr(related_obj, "tenant_id", None)
         if related_tenant_id is not None and related_tenant_id != tenant.id:
             raise ValidationError({field.name: "不能关联其他租户的数据"})
-        if related_obj is None:
-            continue
-        from core_apps.erp_auth.data_permissions import BUSINESS, RESOURCE_BY_CODE, SPECIAL, get_resource_code, get_special_scope_q, resolve_permission_type
-
-        resource_code = get_resource_code(related_obj.__class__)
-        definition = RESOURCE_BY_CODE.get(resource_code)
-        if definition is None:
-            continue
-        permission_type = resolve_permission_type(
-            user=user, resource_code=resource_code, default_type=definition.default_type
-        )
-        related_queryset = apply_erp_tenant_scope(related_obj.__class__.objects.filter(pk=related_obj.pk), user=user)
-        if permission_type == BUSINESS:
-            related_queryset = related_queryset.filter(get_data_scope_filter(
-                user,
-                dept_field=definition.business_dept_field,
-                user_field=definition.business_user_field,
-            ))
-        elif permission_type == SPECIAL:
-            related_queryset = related_queryset.filter(get_special_scope_q(
-                user=user,
-                resource_code=resource_code,
-                scope_field=definition.special_scope_field,
-            ))
-        if not related_queryset.exists():
-            raise ValidationError({field.name: "无权查看或引用该数据"})
 
 
 class ModuleAwareModelViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
@@ -151,6 +125,8 @@ class ModuleAwareModelViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewS
 
     def get_data_permission_scoped_queryset(self):
         queryset = self.get_tenant_scoped_queryset()
+        if getattr(self, "action", None) == "reference_options":
+            return queryset
         return self.apply_data_permission_scope(queryset)
 
     def get_data_permission_type(self, queryset=None):

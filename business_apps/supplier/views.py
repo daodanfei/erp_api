@@ -13,6 +13,7 @@ from core_apps.policies.registry import get_policy
 from .models import Supplier, SupplierContact, SupplierFollowRecord, SupplierTag, SupplierAttachment, SupplierEvaluation, SupplierTransferLog
 from .serializers import (
     SupplierSerializer, SupplierContactSerializer, SupplierFollowRecordSerializer, 
+    SupplierReferenceSerializer,
     SupplierTagSerializer, SupplierAttachmentSerializer, SupplierEvaluationSerializer, SupplierTransferLogSerializer
 )
 from .services import generate_supplier_code, check_duplicate_supplier, transfer_supplier, check_can_delete_supplier
@@ -29,6 +30,7 @@ class SupplierViewSet(BaseBusinessViewSet):
     permission_map = {
         'list': 'supplier:supplier:view',
         'retrieve': 'supplier:supplier:view',
+        'reference_options': 'supplier:supplier:reference',
         'create': 'supplier:supplier:create',
         'update': 'supplier:supplier:update',
         'destroy': 'supplier:supplier:delete',
@@ -37,6 +39,17 @@ class SupplierViewSet(BaseBusinessViewSet):
     }
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['status']
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return SupplierReferenceSerializer
+        return SupplierSerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.filter_queryset(self.get_queryset()).filter(status='ACTIVE')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         policy = get_policy("supplier", user=self.request.user)

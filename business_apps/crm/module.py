@@ -56,6 +56,7 @@ MODULE = ModuleDefinition(
         },
     ),
     permissions=(
+        {"code": "crm:customer:reference", "name": "引用客户", "parent": "crm:customer"},
         {"code": "crm:customer:view", "name": "查看客户", "parent": "crm:customer"},
         {"code": "crm:customer:create", "name": "创建客户", "parent": "crm:customer"},
         {"code": "crm:customer:update", "name": "编辑客户", "parent": "crm:customer"},

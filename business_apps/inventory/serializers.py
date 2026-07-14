@@ -73,11 +73,36 @@ class ProductCategoryTreeSerializer(serializers.ModelSerializer):
                 children = children.filter(tenant=tenant)
         return ProductCategoryTreeSerializer(children, many=True).data
 
+
+class ProductCategoryReferenceSerializer(serializers.ModelSerializer):
+    children = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductCategory
+        fields = ["id", "name", "parent", "sort", "status", "children"]
+
+    def get_children(self, obj):
+        children = obj.children.filter(status=True).order_by("sort", "id")
+        request = self.context.get("request")
+        if request is not None and getattr(request.user, "is_authenticated", False):
+            tenant = getattr(request.user, "tenant", None)
+            if tenant is not None:
+                children = children.filter(tenant=tenant)
+        return ProductCategoryReferenceSerializer(children, many=True, context=self.context).data
+
+
 class UnitSerializer(serializers.ModelSerializer):
     class Meta:
         model = Unit
         fields = '__all__'
         read_only_fields = ('code',)
+
+
+class UnitReferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Unit
+        fields = ["id", "name", "code", "status"]
+
 
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -125,12 +150,45 @@ class ProductSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("禁用计量单位不能用于商品")
         return value
 
+
+class ProductReferenceSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source="category.name", read_only=True)
+    unit_name = serializers.CharField(source="unit.name", read_only=True)
+    unit_code = serializers.CharField(source="unit.code", read_only=True)
+
+    class Meta:
+        model = Product
+        fields = [
+            "id",
+            "product_code",
+            "barcode",
+            "name",
+            "short_name",
+            "specification",
+            "category",
+            "category_name",
+            "unit",
+            "unit_name",
+            "unit_code",
+            "cost_price",
+            "sale_price",
+            "current_stock",
+            "status",
+        ]
+
+
 class WarehouseSerializer(serializers.ModelSerializer):
     manager_name = serializers.CharField(source='manager.username', read_only=True)
     class Meta:
         model = Warehouse
         fields = '__all__'
         read_only_fields = ('warehouse_code',)
+
+
+class WarehouseReferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Warehouse
+        fields = ["id", "warehouse_code", "warehouse_name", "type", "status"]
 
 
 class ActiveWarehouseValidationMixin:
@@ -166,6 +224,25 @@ class InventorySerializer(WarehouseFieldRuleSerializerMixin, serializers.ModelSe
         )
         sellable_qty = obj.current_qty - committed_qty
         return max(sellable_qty, 0)
+
+
+class InventoryReferenceSerializer(serializers.ModelSerializer):
+    """Minimal inventory data used by business forms when selecting a product."""
+
+    sellable_qty = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Inventory
+        fields = ["warehouse", "product", "current_qty", "available_qty", "sellable_qty"]
+
+    def get_sellable_qty(self, obj):
+        from business_apps.sales.services import SalesOrderService
+
+        committed_qty = SalesOrderService.get_open_sales_commitment_quantity(
+            warehouse=obj.warehouse,
+            product=obj.product,
+        )
+        return max(obj.current_qty - committed_qty, 0)
 
 class InventoryTransactionSerializer(WarehouseFieldRuleSerializerMixin, serializers.ModelSerializer):
     warehouse_name = serializers.CharField(source='warehouse.warehouse_name', read_only=True)

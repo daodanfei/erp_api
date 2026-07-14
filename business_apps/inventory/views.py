@@ -23,8 +23,11 @@ from core_apps.tenant.services import TenantService
 from .models import Product, ProductCategory, Unit, ProductImage, ProductAttachment, ProductTag, Warehouse, Inventory, InventoryTransaction, Stocktake, StocktakeItem
 from .serializers import (
     ProductSerializer, ProductCategorySerializer, ProductCategoryTreeSerializer,
+    ProductCategoryReferenceSerializer,
     UnitSerializer, ProductImageSerializer, ProductAttachmentSerializer, ProductTagSerializer,
-    WarehouseSerializer, InventorySerializer, InventoryTransactionSerializer, StocktakeSerializer, StocktakeItemSerializer
+    UnitReferenceSerializer, ProductReferenceSerializer, WarehouseReferenceSerializer,
+    WarehouseSerializer, InventorySerializer, InventoryReferenceSerializer,
+    InventoryTransactionSerializer, StocktakeSerializer, StocktakeItemSerializer
 )
 from .services import generate_product_code, generate_stocktake_no, generate_unit_code, generate_warehouse_code, check_duplicate_product, check_can_delete_product, InventoryService
 from core_apps.policies.registry import get_policy
@@ -44,6 +47,7 @@ class ProductCategoryViewSet(ModuleAwareModelViewSet):
     permission_map = {
         'list': 'inventory:category:view',
         'retrieve': 'inventory:category:view',
+        'reference_options': 'inventory:category:reference',
         'create': 'inventory:category:create',
         'update': 'inventory:category:update',
         'partial_update': 'inventory:category:update',
@@ -57,9 +61,19 @@ class ProductCategoryViewSet(ModuleAwareModelViewSet):
         return queryset
     
     def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return ProductCategoryReferenceSerializer
         if self.action == 'list' and self.request.query_params.get('tree'):
             return ProductCategoryTreeSerializer
         return ProductCategorySerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.get_queryset().filter(status=True)
+        if request.query_params.get('tree'):
+            queryset = queryset.filter(parent__isnull=True).prefetch_related('children')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
         category = self.get_object()
@@ -100,6 +114,7 @@ class UnitViewSet(ModuleAwareModelViewSet):
     permission_map = {
         'list': 'inventory:unit:view',
         'retrieve': 'inventory:unit:view',
+        'reference_options': 'inventory:unit:reference',
         'create': 'inventory:unit:create',
         'update': 'inventory:unit:update',
         'partial_update': 'inventory:unit:update',
@@ -108,6 +123,17 @@ class UnitViewSet(ModuleAwareModelViewSet):
 
     def get_queryset(self):
         return super().get_queryset().order_by("id")
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return UnitReferenceSerializer
+        return UnitSerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.get_queryset().filter(status=True)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def _log_unit_request(self, level: str, event: str, **extra):
         user = getattr(self.request, "user", None)
@@ -248,6 +274,7 @@ class ProductViewSet(BaseBusinessViewSet):
     permission_map = {
         'list': 'inventory:product:view',
         'retrieve': 'inventory:product:view',
+        'reference_options': 'inventory:product:reference',
         'create': 'inventory:product:create',
         'update': 'inventory:product:update',
         'destroy': 'inventory:product:delete',
@@ -257,6 +284,17 @@ class ProductViewSet(BaseBusinessViewSet):
 
     filterset_fields = ['category', 'status', 'brand']
     search_fields = ['product_code', 'barcode', 'name', 'specification']
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return ProductReferenceSerializer
+        return ProductSerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.filter_queryset(self.get_queryset()).filter(status='ACTIVE')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         # 1. Duplication check
@@ -355,10 +393,22 @@ class WarehouseViewSet(ModuleAwareModelViewSet):
     permission_map = {
         'list': 'inventory:warehouse:view',
         'retrieve': 'inventory:warehouse:view',
+        'reference_options': 'inventory:warehouse:reference',
         'create': 'inventory:warehouse:create',
         'update': 'inventory:warehouse:update',
         'destroy': 'inventory:warehouse:delete',
     }
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return WarehouseReferenceSerializer
+        return WarehouseSerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.get_tenant_scoped_queryset().filter(status=True).order_by("warehouse_code", "id")
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)
@@ -403,8 +453,14 @@ class InventoryViewSet(BaseBusinessViewSet):
     permission_map = {
         'list': 'inventory:inventory:view',
         'retrieve': 'inventory:inventory:view',
+        'reference_options': 'inventory:inventory:reference',
         'adjust': 'inventory:inventory:adjust',
     }
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return InventoryReferenceSerializer
+        return InventorySerializer
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -418,6 +474,16 @@ class InventoryViewSet(BaseBusinessViewSet):
             queryset = queryset.filter(current_qty__gt=models.F('product__max_stock'))
             
         return queryset
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        """Return sellable quantity for selected warehouse/product pairs only."""
+        queryset = self.get_tenant_scoped_queryset().filter(
+            warehouse_id=request.query_params.get('warehouse'),
+            product_id=request.query_params.get('product'),
+        )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
     
     @action(detail=False, methods=['post'])
     def adjust(self, request):

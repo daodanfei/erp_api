@@ -48,6 +48,7 @@ MODULE = ModuleDefinition(
         {"code": "finance:aging:view", "name": "查看账龄分析", "parent": "finance"},
         {"code": "finance:reconciliation:customer:view", "name": "查看客户对账", "parent": "finance"},
         {"code": "finance:reconciliation:supplier:view", "name": "查看供应商对账", "parent": "finance"},
+        {"code": "finance:cash:reference", "name": "引用资金账户", "parent": "finance:cash"},
         {"code": "finance:cash:view", "name": "查看资金账户", "parent": "finance"},
         {"code": "finance:cash:create", "name": "新建资金账户", "parent": "finance"},
         {"code": "finance:cash:update", "name": "编辑资金账户", "parent": "finance"},

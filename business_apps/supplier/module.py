@@ -56,6 +56,7 @@ MODULE = ModuleDefinition(
         },
     ),
     permissions=(
+        {"code": "supplier:supplier:reference", "name": "引用供应商", "parent": "supplier:supplier"},
         {"code": "supplier:supplier:view", "name": "查看供应商", "parent": "supplier:supplier"},
         {"code": "supplier:supplier:create", "name": "创建供应商", "parent": "supplier:supplier"},
         {"code": "supplier:supplier:update", "name": "编辑供应商", "parent": "supplier:supplier"},

@@ -113,6 +113,7 @@ def validate_blueprint_config(config: dict | None) -> dict:
     for module_key, module_config in module_configs.items():
         if not isinstance(module_config, dict):
             raise serializers.ValidationError(f"module_configs.{module_key} 必须是对象")
+        normalized["module_configs"][module_key].pop("permission_dependencies", None)
         template = MODULE_CONFIGURATION_CATALOG.get(module_key, {})
         for field_name, expected_type in MODULE_CONFIG_SCHEMA.items():
             template_section = template.get(field_name, {})

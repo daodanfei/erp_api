@@ -3,7 +3,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core_apps.common.permissions import PlatformUserOnly
-from core_apps.modules import get_business_modules, get_core_modules
+from core_apps.erp_auth.permission_dependencies import ERP_PERMISSION_DEPENDENCIES
+from core_apps.modules import get_business_modules, get_core_modules, get_erp_permission_modules
 
 from .services import ConfigurationService
 
@@ -45,3 +46,37 @@ class ConfigurationModuleCatalogView(APIView):
                 for module in modules
             ]
         )
+
+
+class ConfigurationPermissionDependencyView(APIView):
+    permission_classes = [permissions.IsAuthenticated, PlatformUserOnly]
+
+    def get(self, request):
+        permission_labels = _build_erp_permission_label_map()
+        return Response(
+            [
+                {
+                    "trigger_code": trigger_code,
+                    "trigger_name": permission_labels.get(trigger_code, trigger_code),
+                    "required_permissions": [
+                        {
+                            "code": required_code,
+                            "name": permission_labels.get(required_code, required_code),
+                        }
+                        for required_code in required_codes
+                    ],
+                }
+                for trigger_code, required_codes in sorted(ERP_PERMISSION_DEPENDENCIES.items())
+            ]
+        )
+
+
+def _build_erp_permission_label_map() -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for module in get_erp_permission_modules():
+        for item in (*module.menus, *module.permissions):
+            code = item.get("code")
+            name = item.get("name")
+            if code and name:
+                labels[code] = name
+    return labels

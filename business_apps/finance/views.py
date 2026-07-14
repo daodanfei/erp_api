@@ -10,7 +10,12 @@ from core_apps.common.viewsets import (
 from core_apps.erp_auth.compat import build_erp_user_fk_kwargs
 from core_apps.policies.registry import get_policy
 from .models import CashAccount, FinanceExportTask
-from .serializers import CashAccountSerializer, CashAccountTransactionSerializer, FinanceExportTaskSerializer
+from .serializers import (
+    CashAccountReferenceSerializer,
+    CashAccountSerializer,
+    CashAccountTransactionSerializer,
+    FinanceExportTaskSerializer,
+)
 from .services import FinanceStatsService, ReconciliationService
 
 class FinanceViewSet(viewsets.ViewSet):
@@ -81,12 +86,24 @@ class CashAccountViewSet(ModuleAwareModelViewSet):
     permission_map = {
         'list': 'finance:cash:view',
         'retrieve': 'finance:cash:view',
+        'reference_options': 'finance:cash:reference',
         'create': 'finance:cash:create',
         'update': 'finance:cash:update',
         'partial_update': 'finance:cash:update',
         'destroy': 'finance:cash:update',
         'transactions': 'finance:cash:view',
     }
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return CashAccountReferenceSerializer
+        return CashAccountSerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.get_tenant_scoped_queryset().filter(status=True).order_by("name", "id")
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def perform_create(self, serializer):
         policy = get_policy("finance", user=self.request.user)

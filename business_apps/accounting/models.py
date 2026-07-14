@@ -28,7 +28,7 @@ class AccountSubject(models.Model):
     )
 
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name="account_subjects", null=True, blank=True)
-    code = models.CharField(max_length=20, unique=True, verbose_name="科目编码")
+    code = models.CharField(max_length=20, verbose_name="科目编码")
     name = models.CharField(max_length=100, verbose_name="科目名称")
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, verbose_name="科目类别")
     balance_direction = models.CharField(
@@ -62,8 +62,9 @@ class AccountSubject(models.Model):
         verbose_name = "会计科目"
         verbose_name_plural = verbose_name
         ordering = ["code"]
+        unique_together = ("tenant", "code")
         indexes = [
-            models.Index(fields=["code"]),
+            models.Index(fields=["tenant", "code"]),
             models.Index(fields=["category"]),
             models.Index(fields=["enabled"]),
         ]
@@ -102,9 +103,9 @@ class AccountingPeriod(models.Model):
         verbose_name = "会计期间"
         verbose_name_plural = verbose_name
         ordering = ["-year", "-month"]
-        unique_together = ("year", "month")
+        unique_together = ("tenant", "year", "month")
         indexes = [
-            models.Index(fields=["year", "month"]),
+            models.Index(fields=["tenant", "year", "month"]),
             models.Index(fields=["start_date", "end_date"]),
             models.Index(fields=["status"]),
         ]
@@ -235,7 +236,7 @@ class BusinessPostingLog(models.Model):
         verbose_name = "业务过账日志"
         verbose_name_plural = verbose_name
         ordering = ["-created_at"]
-        unique_together = ("event_type", "business_type", "business_id")
+        unique_together = ("tenant", "event_type", "business_type", "business_id")
         indexes = [
             models.Index(fields=["event_type"]),
             models.Index(fields=["business_type", "business_id"]),

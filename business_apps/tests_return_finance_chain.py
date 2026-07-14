@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -7,8 +8,8 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from business_apps.accounting.models import BusinessPostingLog, Voucher
-from business_apps.accounting.services import SubjectInitService
+from business_apps.accounting.models import AccountSubject, AccountingPeriod, BusinessPostingLog, Voucher
+from business_apps.accounting.services import PeriodService, SubjectInitService
 from business_apps.ap_payable.models import APAccount, SupplierCreditNote, SupplierRefund
 from business_apps.ap_payable.services import APService
 from business_apps.ar_receivable.models import CustomerRefund, Receipt, Receivable, WriteOff
@@ -125,6 +126,62 @@ class ReturnFinanceChainTest(TestCase):
             "business_apps.platform.services.CodeRuleService",
             generate=build_code_rule_generator(),
         )
+
+    def test_accounting_period_is_scoped_per_tenant_for_same_month(self):
+        other_tenant = Tenant.objects.create(code="return-finance-tenant-b", name="Return Finance Tenant B", status="ACTIVE")
+
+        first_period = PeriodService.get_or_create_period(date(2026, 7, 14), tenant=self.tenant)
+        second_period = PeriodService.get_or_create_period(date(2026, 7, 14), tenant=other_tenant)
+
+        self.assertNotEqual(first_period.id, second_period.id)
+        self.assertEqual(
+            AccountingPeriod.objects.filter(year=2026, month=7).count(),
+            2,
+        )
+        self.assertCountEqual(
+            AccountingPeriod.objects.filter(year=2026, month=7).values_list("tenant_id", flat=True),
+            [self.tenant.id, other_tenant.id],
+        )
+
+    def test_account_subject_codes_can_repeat_across_tenants(self):
+        other_tenant = Tenant.objects.create(code="return-finance-tenant-c", name="Return Finance Tenant C", status="ACTIVE")
+        other_user = ERPUser.objects.create_user(
+            tenant=other_tenant,
+            username="return_finance_user_b",
+            password="password",
+            must_change_password=False,
+        )
+
+        SubjectInitService.init_subjects(created_by=other_user)
+
+        self.assertEqual(
+            AccountSubject.objects.filter(tenant=self.tenant, code="1001").count(),
+            1,
+        )
+        self.assertEqual(
+            AccountSubject.objects.filter(tenant=other_tenant, code="1001").count(),
+            1,
+        )
+
+    def test_business_posting_log_unique_scope_is_per_tenant(self):
+        other_tenant = Tenant.objects.create(code="return-finance-tenant-d", name="Return Finance Tenant D", status="ACTIVE")
+
+        first = BusinessPostingLog.objects.create(
+            tenant=self.tenant,
+            event_type="PURCHASE_RECEIPT_CONFIRMED",
+            business_type="PURCHASE_RECEIPT",
+            business_id=99,
+            business_document_no="RC-LOG-001",
+        )
+        second = BusinessPostingLog.objects.create(
+            tenant=other_tenant,
+            event_type="PURCHASE_RECEIPT_CONFIRMED",
+            business_type="PURCHASE_RECEIPT",
+            business_id=99,
+            business_document_no="RC-LOG-001",
+        )
+
+        self.assertNotEqual(first.id, second.id)
 
     @patch("business_apps.ar_receivable.serializers.has_erp_role_permission", return_value=True)
     def test_receipt_and_refund_serializer_use_their_own_permission_codes(self, mocked_has_permission):

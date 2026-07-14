@@ -16,6 +16,7 @@ class AccountSubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccountSubject
         fields = "__all__"
+        read_only_fields = ("tenant", "created_by", "created_at", "updated_at")
 
 
 class AccountingPeriodSerializer(serializers.ModelSerializer):
@@ -24,6 +25,7 @@ class AccountingPeriodSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccountingPeriod
         fields = "__all__"
+        read_only_fields = ("tenant", "closed_at", "closed_by", "created_at", "updated_at")
 
 
 class VoucherLineSerializer(serializers.ModelSerializer):
@@ -55,4 +57,3 @@ class BusinessPostingLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = BusinessPostingLog
         fields = "__all__"
-

@@ -1868,6 +1868,20 @@ class ERPAccountingIsolationApiTest(APITestCase):
         self.subject.refresh_from_db()
         self.assertIsNone(self.subject.parent_id)
 
+    def test_account_subject_update_cannot_reassign_tenant(self):
+        self.login()
+
+        response = self.client.patch(
+            f"/api/accounting/subjects/{self.subject.id}/",
+            {"tenant": self.other_tenant.id, "name": "Tenant A 科目-更新"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.subject.refresh_from_db()
+        self.assertEqual(self.subject.tenant_id, self.tenant.id)
+        self.assertEqual(self.subject.name, "Tenant A 科目-更新")
+
 
 class ERPUserMasterDataApiTest(APITestCase):
     def setUp(self):

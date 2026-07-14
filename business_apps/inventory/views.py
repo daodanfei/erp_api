@@ -7,6 +7,8 @@ from django.db import models
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Q
+import logging
+import time
 from core_apps.common.viewsets import (
     BaseBusinessViewSet,
     ModuleAwareModelViewSet,
@@ -32,6 +34,7 @@ from django.http import HttpResponse
 MODULE_KEY = "inventory"
 STOCKTAKE_APPROVE_PERMISSION_CODE = "inventory:stocktake:approve"
 STOCKTAKE_COMPLETE_PERMISSION_CODE = "inventory:stocktake:complete"
+logger = logging.getLogger(__name__)
 
 
 class ProductCategoryViewSet(ModuleAwareModelViewSet):
@@ -105,6 +108,112 @@ class UnitViewSet(ModuleAwareModelViewSet):
 
     def get_queryset(self):
         return super().get_queryset().order_by("id")
+
+    def _log_unit_request(self, level: str, event: str, **extra):
+        user = getattr(self.request, "user", None)
+        tenant = getattr(user, "tenant", None)
+        payload = {
+            "event": event,
+            "action": getattr(self, "action", None),
+            "method": getattr(self.request, "method", None),
+            "path": getattr(self.request, "path", None),
+            "tenant_id": getattr(tenant, "id", None),
+            "tenant_code": getattr(tenant, "code", None),
+            "user_id": getattr(user, "id", None),
+            "username": getattr(user, "username", None),
+            **extra,
+        }
+        getattr(logger, level)("inventory.units %s", payload)
+
+    def list(self, request, *args, **kwargs):
+        started_at = time.monotonic()
+        self._log_unit_request("info", "list.start")
+        try:
+            response = super().list(request, *args, **kwargs)
+            count = len(response.data) if isinstance(response.data, list) else None
+            self._log_unit_request(
+                "info",
+                "list.success",
+                status_code=response.status_code,
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+                result_count=count,
+            )
+            return response
+        except Exception:
+            self._log_unit_request(
+                "exception",
+                "list.error",
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+            )
+            raise
+
+    def create(self, request, *args, **kwargs):
+        started_at = time.monotonic()
+        self._log_unit_request("info", "create.start", payload_keys=sorted(request.data.keys()))
+        try:
+            response = super().create(request, *args, **kwargs)
+            self._log_unit_request(
+                "info",
+                "create.success",
+                status_code=response.status_code,
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+                unit_id=response.data.get("id") if isinstance(response.data, dict) else None,
+                unit_code=response.data.get("code") if isinstance(response.data, dict) else None,
+            )
+            return response
+        except Exception:
+            self._log_unit_request(
+                "exception",
+                "create.error",
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+                payload=request.data,
+            )
+            raise
+
+    def update(self, request, *args, **kwargs):
+        started_at = time.monotonic()
+        self._log_unit_request("info", "update.start", unit_id=kwargs.get("pk"), payload_keys=sorted(request.data.keys()))
+        try:
+            response = super().update(request, *args, **kwargs)
+            self._log_unit_request(
+                "info",
+                "update.success",
+                unit_id=kwargs.get("pk"),
+                status_code=response.status_code,
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+            )
+            return response
+        except Exception:
+            self._log_unit_request(
+                "exception",
+                "update.error",
+                unit_id=kwargs.get("pk"),
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+                payload=request.data,
+            )
+            raise
+
+    def destroy(self, request, *args, **kwargs):
+        started_at = time.monotonic()
+        self._log_unit_request("info", "destroy.start", unit_id=kwargs.get("pk"))
+        try:
+            response = super().destroy(request, *args, **kwargs)
+            self._log_unit_request(
+                "info",
+                "destroy.success",
+                unit_id=kwargs.get("pk"),
+                status_code=response.status_code,
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+            )
+            return response
+        except Exception:
+            self._log_unit_request(
+                "exception",
+                "destroy.error",
+                unit_id=kwargs.get("pk"),
+                duration_ms=round((time.monotonic() - started_at) * 1000, 2),
+            )
+            raise
 
     def perform_create(self, serializer):
         validate_erp_related_tenant_scope(self.queryset.model, validated_data=serializer.validated_data, user=self.request.user)

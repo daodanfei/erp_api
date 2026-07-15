@@ -462,7 +462,8 @@ class PurchaseReturnOrderViewSet(BaseBusinessViewSet):
 class InventoryAlertViewSet(BaseBusinessViewSet):
     queryset = InventoryAlert.objects.all()
     serializer_class = InventoryAlertSerializer
-    user_field = 'created_by'
+    dept_field = 'warehouse__manager__dept'
+    user_field = 'warehouse__manager'
     permission_classes = [ERPActionPermission]
     filter_backends = [DjangoFilterBackend]
     filterset_class = InventoryAlertFilter

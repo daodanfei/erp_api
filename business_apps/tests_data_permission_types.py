@@ -11,6 +11,8 @@ from business_apps.crm.views import CustomerViewSet
 from business_apps.inventory.models import Product, ProductCategory, Unit, Warehouse
 from business_apps.inventory.views import ProductViewSet, WarehouseViewSet
 from business_apps.purchase.models import PurchaseReceipt
+from business_apps.supply_chain.models import InventoryAlert
+from business_apps.supply_chain.views import InventoryAlertViewSet
 from core_apps.common.viewsets import validate_erp_related_tenant_scope
 from core_apps.erp_auth.models import (
     ERPDataPermissionPolicy,
@@ -102,6 +104,53 @@ class TenantDataPermissionTypeTest(TestCase):
             department=self.parent_dept,
         )
         self.assertSetEqual(set(self._query(WarehouseViewSet)), {granted})
+
+    def test_inventory_alert_scope_uses_warehouse_special_grant(self):
+        category = ProductCategory.objects.create(tenant=self.tenant, name="预警分类")
+        unit = Unit.objects.create(tenant=self.tenant, name="箱", code="UNIT-ALERT")
+        product = Product.objects.create(
+            tenant=self.tenant,
+            product_code="P-ALERT",
+            name="预警商品",
+            category=category,
+            unit=unit,
+        )
+        granted_warehouse = Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="WH-ALERT-GRANTED",
+            warehouse_name="授权预警仓",
+        )
+        hidden_warehouse = Warehouse.objects.create(
+            tenant=self.tenant,
+            warehouse_code="WH-ALERT-HIDDEN",
+            warehouse_name="未授权预警仓",
+        )
+        granted_alert = InventoryAlert.objects.create(
+            tenant=self.tenant,
+            warehouse=granted_warehouse,
+            product=product,
+            alert_type="LOW_STOCK",
+            current_qty=1,
+            threshold_value=10,
+        )
+        InventoryAlert.objects.create(
+            tenant=self.tenant,
+            warehouse=hidden_warehouse,
+            product=product,
+            alert_type="OUT_OF_STOCK",
+            current_qty=0,
+            threshold_value=10,
+        )
+
+        self.assertFalse(self._query(InventoryAlertViewSet).exists())
+
+        ERPDataSpecialGrant.objects.create(
+            tenant=self.tenant,
+            resource_code="supply_chain.inventoryalert",
+            object_id=str(granted_warehouse.id),
+            user=self.manager,
+        )
+        self.assertSetEqual(set(self._query(InventoryAlertViewSet)), {granted_alert})
 
     def test_super_admin_system_role_sees_all_special_data(self):
         first = Warehouse.objects.create(

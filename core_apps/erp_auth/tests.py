@@ -896,6 +896,29 @@ class ERPUserManagementApiTest(APITestCase):
         )
         self.assertTrue(self.staff_role.permissions.filter(id=user_reference.id).exists())
 
+    def test_ar_generate_permission_adds_sales_order_reference_dependency(self):
+        for module_key in ("ar_receivable", "sales"):
+            TenantModuleState.objects.update_or_create(
+                tenant=self.tenant,
+                module_key=module_key,
+                defaults={"enabled": True},
+            )
+        ar_generate, _ = ERPPermission.objects.get_or_create(
+            code="ar:receivable:generate",
+            defaults={"name": "生成应收账款", "type": "BUTTON"},
+        )
+        sales_order_reference, _ = ERPPermission.objects.get_or_create(
+            code="sales:order:reference",
+            defaults={"name": "引用销售订单", "type": "BUTTON"},
+        )
+        self.staff_role.permissions.set([ar_generate])
+
+        synced_count = sync_role_reference_permissions(tenant=self.tenant)
+
+        self.assertEqual(synced_count, 1)
+        self.staff_role.refresh_from_db()
+        self.assertTrue(self.staff_role.permissions.filter(id=sales_order_reference.id).exists())
+
     def test_user_reference_options_uses_reference_permission_only(self):
         user_reference = ERPPermission.objects.get(code="system:user:reference")
         self.staff_role.permissions.set([user_reference])
@@ -961,7 +984,7 @@ class ERPUserManagementApiTest(APITestCase):
         ref_user.roles.add(self.staff_role)
         category = ProductCategory.objects.create(tenant=self.tenant, name="引用分类", status=True)
         unit = Unit.objects.create(tenant=self.tenant, name="个", code="REF-U", status=True)
-        Product.objects.create(
+        product = Product.objects.create(
             tenant=self.tenant,
             product_code="REF-P",
             name="引用商品",
@@ -971,7 +994,7 @@ class ERPUserManagementApiTest(APITestCase):
             created_by=ref_user,
             dept=self.active_department,
         )
-        Warehouse.objects.create(
+        warehouse = Warehouse.objects.create(
             tenant=self.tenant,
             warehouse_code="REF-W",
             warehouse_name="引用仓库",
@@ -999,8 +1022,8 @@ class ERPUserManagementApiTest(APITestCase):
 
         inventory = Inventory.objects.create(
             tenant=self.tenant,
-            warehouse=Warehouse.objects.get(warehouse_code="REF-W"),
-            product=Product.objects.get(product_code="REF-P"),
+            warehouse=warehouse,
+            product=product,
             current_qty=12,
             locked_qty=2,
         )
@@ -1018,6 +1041,12 @@ class ERPUserManagementApiTest(APITestCase):
             "available_qty": Decimal("10.000"),
             "sellable_qty": Decimal("12.000"),
         }])
+        warehouse_inventory_reference = self.client.get(
+            "/api/inventory/inventories/reference-options/",
+            {"warehouse": warehouse.id},
+        )
+        self.assertEqual(warehouse_inventory_reference.status_code, status.HTTP_200_OK)
+        self.assertEqual(warehouse_inventory_reference.data, inventory_reference.data)
 
     def test_supplier_reference_options_ignore_role_data_scope(self):
         TenantModuleState.objects.update_or_create(
@@ -1074,6 +1103,70 @@ class ERPUserManagementApiTest(APITestCase):
         supplier_names = {item["supplier_name"] for item in reference_response.data}
         self.assertIn("其他负责人供应商", supplier_names)
         self.assertNotIn("其他租户供应商", supplier_names)
+
+    def test_sales_order_reference_options_use_reference_permission_only(self):
+        TenantModuleState.objects.update_or_create(
+            tenant=self.tenant,
+            module_key="sales",
+            defaults={"enabled": True},
+        )
+        sales_order_reference, _ = ERPPermission.objects.get_or_create(
+            code="sales:order:reference",
+            defaults={"name": "引用销售订单", "type": "BUTTON"},
+        )
+        self.staff_role.permissions.set([sales_order_reference])
+        ref_user = ERPUser.objects.create_user(
+            tenant=self.tenant,
+            username="sales_order_ref_user",
+            password="password123",
+            dept=self.active_department,
+            status=True,
+        )
+        ref_user.roles.add(self.staff_role)
+        customer = Customer.objects.create(
+            tenant=self.tenant,
+            customer_code="C-SALES-REF",
+            customer_name="引用订单客户",
+            owner=ref_user,
+            dept=self.active_department,
+            created_by=ref_user,
+        )
+        order = SalesOrder.objects.create(
+            tenant=self.tenant,
+            order_no="SO-REF-001",
+            customer=customer,
+            status=SalesOrder.STATUS_APPROVED,
+            created_by=ref_user,
+            total_quantity=1,
+            total_amount=100,
+        )
+        other_tenant = Tenant.objects.create(
+            code="sales-ref-other",
+            name="Sales Reference Other",
+            status="ACTIVE",
+            instance=self.instance,
+        )
+        other_customer = Customer.objects.create(
+            tenant=other_tenant,
+            customer_code="C-SALES-OTHER",
+            customer_name="其他租户客户",
+        )
+        SalesOrder.objects.create(
+            tenant=other_tenant,
+            order_no="SO-REF-OTHER",
+            customer=other_customer,
+            status=SalesOrder.STATUS_APPROVED,
+        )
+        self.client.force_authenticate(ref_user)
+
+        list_response = self.client.get("/api/sales/orders/")
+        reference_response = self.client.get("/api/sales/orders/reference-options/")
+
+        self.assertEqual(list_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(reference_response.status_code, status.HTTP_200_OK)
+        order_numbers = {item["order_no"] for item in reference_response.data}
+        self.assertIn(order.order_no, order_numbers)
+        self.assertNotIn("SO-REF-OTHER", order_numbers)
 
     def test_permission_list_hides_doc_marked_pages_for_erp(self):
         self.login()

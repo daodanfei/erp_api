@@ -80,6 +80,7 @@ ERP_PERMISSION_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "finance:cash:update": ("system:user:reference",),
     "ar:receipt:create": ("crm:customer:reference", "finance:cash:reference"),
     "ar:receipt:update": ("crm:customer:reference", "finance:cash:reference"),
+    "ar:receivable:generate": ("sales:order:reference",),
     "ar:refund:create": ("crm:customer:reference", "finance:cash:reference"),
     "ar:refund:update": ("crm:customer:reference", "finance:cash:reference"),
     "ap:payment:create": ("supplier:supplier:reference", "finance:cash:reference"),

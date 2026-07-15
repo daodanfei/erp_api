@@ -66,6 +66,7 @@ MODULE = ModuleDefinition(
     ),
     permissions=(
         {"code": "sales:order:view", "name": "查看订单", "parent": "sales:order"},
+        {"code": "sales:order:reference", "name": "引用销售订单", "parent": "sales:order"},
         {"code": "sales:order:create", "name": "创建订单", "parent": "sales:order"},
         {"code": "sales:order:update", "name": "编辑订单", "parent": "sales:order"},
         {"code": "sales:order:delete", "name": "删除订单", "parent": "sales:order"},

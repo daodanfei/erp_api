@@ -477,11 +477,14 @@ class InventoryViewSet(BaseBusinessViewSet):
 
     @action(detail=False, methods=['get'], url_path='reference-options')
     def reference_options(self, request):
-        """Return sellable quantity for selected warehouse/product pairs only."""
-        queryset = self.get_tenant_scoped_queryset().filter(
-            warehouse_id=request.query_params.get('warehouse'),
-            product_id=request.query_params.get('product'),
-        )
+        """Return inventory quantities for business-form references."""
+        queryset = self.get_tenant_scoped_queryset()
+        warehouse_id = request.query_params.get('warehouse')
+        product_id = request.query_params.get('product')
+        if warehouse_id:
+            queryset = queryset.filter(warehouse_id=warehouse_id)
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
     

@@ -9,7 +9,7 @@ from core_apps.system.operation_log import (
     summarize_operation_log_items,
 )
 from .models import SalesOrder, SalesOrderItem, Shipment, OrderApprovalLog, OrderAttachment
-from .serializers import SalesOrderSerializer, SalesOrderItemSerializer, ShipmentSerializer, OrderApprovalLogSerializer
+from .serializers import SalesOrderSerializer, SalesOrderItemSerializer, ShipmentSerializer, OrderApprovalLogSerializer, SalesOrderReferenceSerializer
 from business_apps.supply_chain.serializers import OutboundOrderSerializer
 from .services import SalesOrderService
 from business_apps.crm.models import Customer
@@ -27,6 +27,7 @@ class SalesOrderViewSet(BaseBusinessViewSet):
     permission_map = {
         'list': 'sales:order:view',
         'retrieve': 'sales:order:view',
+        'reference_options': 'sales:order:reference',
         'create': 'sales:order:create',
         'update': 'sales:order:update',
         'destroy': 'sales:order:delete',
@@ -39,6 +40,17 @@ class SalesOrderViewSet(BaseBusinessViewSet):
         'cancel': 'sales:order:cancel',
         'statistics': 'sales:order:view',
     }
+
+    def get_serializer_class(self):
+        if self.action == 'reference_options':
+            return SalesOrderReferenceSerializer
+        return SalesOrderSerializer
+
+    @action(detail=False, methods=['get'], url_path='reference-options')
+    def reference_options(self, request):
+        queryset = self.get_tenant_scoped_queryset().order_by('-order_date', '-id')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
     def create(self, request, *args, **kwargs):
         customer_id = request.data.get('customer')

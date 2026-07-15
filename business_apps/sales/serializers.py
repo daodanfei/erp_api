@@ -83,3 +83,11 @@ class SalesOrderSerializer(serializers.ModelSerializer):
         model = SalesOrder
         fields = '__all__'
         read_only_fields = ('order_no', 'status', 'total_quantity', 'total_amount', 'created_by')
+
+
+class SalesOrderReferenceSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source='customer.customer_name', read_only=True)
+
+    class Meta:
+        model = SalesOrder
+        fields = ('id', 'order_no', 'customer', 'customer_name', 'status', 'order_date', 'total_amount')

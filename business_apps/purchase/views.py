@@ -63,12 +63,15 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少供应商或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            supplier = self.get_scoped_related_object(Supplier.objects.filter(is_deleted=False), id=supplier_id)
+            supplier = self.get_tenant_scoped_related_object(Supplier.objects.filter(is_deleted=False), id=supplier_id)
             processed_items = []
             for item in items_data:
                 processed_items.append({
-                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
-                    'warehouse': item.get('warehouse'),
+                    'product': self.get_tenant_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
+                    'warehouse': (
+                        self.get_tenant_scoped_related_object(Warehouse.objects.filter(status=True), id=item['warehouse'])
+                        if item.get('warehouse') is not None else None
+                    ),
                     'quantity': item['quantity'],
                     'unit_price': item['unit_price'],
                     'remark': item.get('remark', ''),
@@ -80,7 +83,7 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except ObjectDoesNotExist:
-            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "关联数据不存在、已停用或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -96,15 +99,18 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             remark = request.data.get('remark')
             expected_arrival_date = request.data.get('expected_arrival_date')
 
-            supplier = self.get_scoped_related_object(Supplier.objects.filter(is_deleted=False), id=supplier_id) if supplier_id else None
+            supplier = self.get_tenant_scoped_related_object(Supplier.objects.filter(is_deleted=False), id=supplier_id) if supplier_id else None
 
             processed_items = None
             if items_data is not None:
                 processed_items = []
                 for item in items_data:
                     processed_items.append({
-                        'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
-                        'warehouse': item.get('warehouse'),
+                        'product': self.get_tenant_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
+                        'warehouse': (
+                            self.get_tenant_scoped_related_object(Warehouse.objects.filter(status=True), id=item['warehouse'])
+                            if item.get('warehouse') is not None else None
+                        ),
                         'quantity': item['quantity'],
                         'unit_price': item['unit_price'],
                         'remark': item.get('remark', ''),
@@ -124,7 +130,7 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
             serializer = self.get_serializer(order)
             return Response(serializer.data)
         except ObjectDoesNotExist:
-            return Response({"detail": "关联数据不存在或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "关联数据不存在、已停用或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

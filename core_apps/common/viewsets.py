@@ -93,6 +93,10 @@ class ModuleAwareModelViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewS
         queryset = apply_erp_tenant_scope(queryset, user=self.request.user)
         return self.apply_related_data_permission_scope(queryset)
 
+    def get_tenant_scoped_related_object(self, queryset, **lookup):
+        """Resolve a selectable relation inside the current tenant only."""
+        return apply_erp_tenant_scope(queryset, user=self.request.user).get(**lookup)
+
     def apply_related_data_permission_scope(self, queryset):
         from core_apps.erp_auth.data_permissions import BUSINESS, RESOURCE_BY_CODE, SPECIAL, get_resource_code, get_special_scope_q, resolve_permission_type
 
@@ -183,6 +187,8 @@ class ModuleAwareReadOnlyViewSet(viewsets.ReadOnlyModelViewSet):
     def get_scoped_related_queryset(self, queryset):
         queryset = apply_erp_tenant_scope(queryset, user=self.request.user)
         return ModuleAwareModelViewSet.apply_related_data_permission_scope(self, queryset)
+
+    get_tenant_scoped_related_object = ModuleAwareModelViewSet.get_tenant_scoped_related_object
 
     def get_scoped_related_object(self, queryset, **lookup):
         return self.get_scoped_related_queryset(queryset).get(**lookup)

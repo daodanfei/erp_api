@@ -13,7 +13,7 @@ from .serializers import SalesOrderSerializer, SalesOrderItemSerializer, Shipmen
 from business_apps.supply_chain.serializers import OutboundOrderSerializer
 from .services import SalesOrderService
 from business_apps.crm.models import Customer
-from business_apps.inventory.models import Product
+from business_apps.inventory.models import Product, Warehouse
 
 MODULE_KEY = "sales"
 
@@ -62,13 +62,16 @@ class SalesOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少客户或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            customer = self.get_scoped_related_object(Customer.objects.all(), id=customer_id)
+            customer = self.get_tenant_scoped_related_object(Customer.objects.all(), id=customer_id)
             # Resolve products
             processed_items = []
             for item in items_data:
                 processed_items.append({
-                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
-                    'warehouse': item.get('warehouse'),
+                    'product': self.get_tenant_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
+                    'warehouse': (
+                        self.get_tenant_scoped_related_object(Warehouse.objects.filter(status=True), id=item['warehouse'])
+                        if item.get('warehouse') is not None else None
+                    ),
                     'quantity': item['quantity'],
                     'unit_price': item['unit_price'],
                 })
@@ -82,6 +85,8 @@ class SalesOrderViewSet(BaseBusinessViewSet):
             )
             serializer = self.get_serializer(order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ObjectDoesNotExist:
+            return Response({"detail": "关联数据不存在、已停用或不属于当前租户"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -97,14 +102,17 @@ class SalesOrderViewSet(BaseBusinessViewSet):
             remark = request.data.get('remark')
             expected_delivery_date = request.data.get('expected_delivery_date')
 
-            customer = self.get_scoped_related_object(Customer.objects.all(), id=customer_id) if customer_id else None
+            customer = self.get_tenant_scoped_related_object(Customer.objects.all(), id=customer_id) if customer_id else None
             processed_items = None
             if items_data is not None:
                 processed_items = []
                 for item in items_data:
                     processed_items.append({
-                        'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
-                        'warehouse': item.get('warehouse'),
+                        'product': self.get_tenant_scoped_related_object(Product.objects.filter(is_deleted=False), id=item['product']),
+                        'warehouse': (
+                            self.get_tenant_scoped_related_object(Warehouse.objects.filter(status=True), id=item['warehouse'])
+                            if item.get('warehouse') is not None else None
+                        ),
                         'quantity': item['quantity'],
                         'unit_price': item['unit_price'],
                     })

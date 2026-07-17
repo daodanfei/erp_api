@@ -1104,6 +1104,103 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertIn("其他负责人供应商", supplier_names)
         self.assertNotIn("其他租户供应商", supplier_names)
 
+    @patch("business_apps.purchase.services.PurchaseOrderService.generate_order_no", return_value="PO-REF-PERM-001")
+    def test_purchase_order_create_works_without_product_view_permission(self, _mock_order_no):
+        for module_key in ("supplier", "purchase"):
+            TenantModuleState.objects.update_or_create(
+                tenant=self.tenant, module_key=module_key, defaults={"enabled": True}
+            )
+        codes = (
+            "purchase:order:create", "supplier:supplier:reference",
+            "inventory:product:reference", "inventory:warehouse:reference",
+        )
+        self.staff_role.permissions.set([
+            ERPPermission.objects.get_or_create(
+                code=code, defaults={"name": code, "type": "BUTTON"}
+            )[0] for code in codes
+        ])
+        ref_user = ERPUser.objects.create_user(
+            tenant=self.tenant, username="purchase_creator", password="password123",
+            dept=self.active_department, status=True,
+        )
+        ref_user.roles.add(self.staff_role)
+        supplier = Supplier.objects.create(
+            tenant=self.tenant, supplier_code="SUP-CREATE-REF", supplier_name="可引用供应商",
+            status="ACTIVE",
+        )
+        category = ProductCategory.objects.create(tenant=self.tenant, name="采购分类")
+        unit = Unit.objects.create(tenant=self.tenant, name="件", code="PURCHASE-REF-U")
+        product = Product.objects.create(
+            tenant=self.tenant, product_code="PURCHASE-REF-P", name="采购引用商品",
+            category=category, unit=unit, status="ACTIVE",
+        )
+        warehouse = Warehouse.objects.create(
+            tenant=self.tenant, warehouse_code="PURCHASE-REF-W", warehouse_name="采购授权仓"
+        )
+        self.client.force_authenticate(ref_user)
+
+        self.assertEqual(self.client.get("/api/inventory/products/").status_code, status.HTTP_403_FORBIDDEN)
+        response = self.client.post(
+            "/api/purchase/orders/",
+            {"supplier": supplier.id, "items": [{
+                "product": product.id, "warehouse": warehouse.id,
+                "quantity": "2.000", "unit_price": "10.00",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+    @patch("business_apps.sales.services.SalesOrderService.generate_order_no", return_value="SO-REF-PERM-001")
+    def test_sales_order_create_works_without_product_view_permission(self, _mock_order_no):
+        for module_key in ("crm", "sales"):
+            TenantModuleState.objects.update_or_create(
+                tenant=self.tenant, module_key=module_key, defaults={"enabled": True}
+            )
+        codes = (
+            "sales:order:create", "crm:customer:reference", "inventory:product:reference",
+            "inventory:warehouse:reference", "inventory:inventory:reference",
+        )
+        self.staff_role.permissions.set([
+            ERPPermission.objects.get_or_create(
+                code=code, defaults={"name": code, "type": "BUTTON"}
+            )[0] for code in codes
+        ])
+        ref_user = ERPUser.objects.create_user(
+            tenant=self.tenant, username="sales_creator", password="password123",
+            dept=self.active_department, status=True,
+        )
+        ref_user.roles.add(self.staff_role)
+        customer = Customer.objects.create(
+            tenant=self.tenant, customer_code="CUS-CREATE-REF", customer_name="可引用客户",
+            status="ACTIVE",
+            credit_limit="10000.00",
+        )
+        category = ProductCategory.objects.create(tenant=self.tenant, name="销售分类")
+        unit = Unit.objects.create(tenant=self.tenant, name="件", code="SALES-REF-U")
+        product = Product.objects.create(
+            tenant=self.tenant, product_code="SALES-REF-P", name="销售引用商品",
+            category=category, unit=unit, status="ACTIVE",
+        )
+        warehouse = Warehouse.objects.create(
+            tenant=self.tenant, warehouse_code="SALES-REF-W", warehouse_name="销售授权仓"
+        )
+        Inventory.objects.create(
+            tenant=self.tenant, warehouse=warehouse, product=product, current_qty="10.000"
+        )
+        self.client.force_authenticate(ref_user)
+
+        response = self.client.post(
+            "/api/sales/orders/",
+            {"customer": customer.id, "items": [{
+                "product": product.id, "warehouse": warehouse.id,
+                "quantity": "2.000", "unit_price": "20.00",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
     def test_sales_order_reference_options_use_reference_permission_only(self):
         TenantModuleState.objects.update_or_create(
             tenant=self.tenant,

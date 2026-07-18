@@ -298,16 +298,16 @@ class SalesReturnOrderViewSet(BaseBusinessViewSet):
             return Response({"detail": "缺少仓库或商品明细"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            warehouse = self.get_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
-            customer = self.get_scoped_related_object(Customer.objects.filter(is_deleted=False), id=request.data['customer']) if request.data.get('customer') else None
+            warehouse = self.get_tenant_scoped_related_object(Warehouse.objects.all(), id=warehouse_id)
+            customer = self.get_tenant_scoped_related_object(Customer.objects.filter(is_deleted=False), id=request.data['customer']) if request.data.get('customer') else None
             sales_order = None
             if request.data.get('sales_order'):
                 from business_apps.sales.models import SalesOrder
-                sales_order = self.get_scoped_related_object(SalesOrder.objects.all(), id=request.data['sales_order'])
+                sales_order = self.get_tenant_scoped_related_object(SalesOrder.objects.all(), id=request.data['sales_order'])
 
             processed_items = [
                 {
-                    'product': self.get_scoped_related_object(Product.objects.filter(is_deleted=False), id=i['product']),
+                    'product': self.get_tenant_scoped_related_object(Product.objects.filter(is_deleted=False), id=i['product']),
                     'quantity': i['quantity'],
                     'remark': i.get('remark', ''),
                 }

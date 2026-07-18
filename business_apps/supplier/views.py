@@ -2,6 +2,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter
 from django.utils import timezone
 from django.db.models import Count, Sum, Q
 from django.db.models.functions import TruncMonth
@@ -37,8 +38,12 @@ class SupplierViewSet(BaseBusinessViewSet):
         'transfer': 'supplier:supplier:transfer',
         'purchase_statistics': 'supplier:supplier:view',
     }
-    filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['status']
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['status', 'supplier_level', 'supplier_type']
+    search_fields = [
+        'supplier_code', 'supplier_name', 'short_name',
+        'contact_phone', 'email', 'tax_number',
+    ]
 
     def get_serializer_class(self):
         if self.action == 'reference_options':

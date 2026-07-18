@@ -448,6 +448,10 @@ class InventoryViewSet(BaseBusinessViewSet):
     queryset = Inventory.objects.all()
     serializer_class = InventorySerializer
     filterset_fields = ['warehouse', 'product']
+    search_fields = [
+        'product__product_code', 'product__barcode', 'product__name',
+        'warehouse__warehouse_code', 'warehouse__warehouse_name',
+    ]
     dept_field = 'warehouse__manager__dept'
     user_field = 'warehouse__manager'
     permission_map = {
@@ -522,6 +526,10 @@ class InventoryTransactionViewSet(ModuleAwareReadOnlyViewSet):
     queryset = InventoryTransaction.objects.all()
     serializer_class = InventoryTransactionSerializer
     filterset_fields = ['warehouse', 'product', 'transaction_type']
+    search_fields = [
+        'transaction_no', 'product__product_code', 'product__name',
+        'warehouse__warehouse_code', 'warehouse__warehouse_name', 'remark',
+    ]
     permission_map = {
         'list': 'inventory:transaction:view',
         'retrieve': 'inventory:transaction:view',

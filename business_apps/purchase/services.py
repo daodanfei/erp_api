@@ -576,15 +576,18 @@ class PurchaseOrderService:
     @staticmethod
     def get_statistics(user=None, start_date=None, end_date=None):
         """采购统计，支持日期范围过滤"""
-        base_q = Q()
+        order_date_q = Q()
+        item_order_date_q = Q()
         if start_date:
-            base_q &= Q(order_date__gte=start_date)
+            order_date_q &= Q(order_date__gte=start_date)
+            item_order_date_q &= Q(purchase_order__order_date__gte=start_date)
         if end_date:
-            base_q &= Q(order_date__lte=end_date)
+            order_date_q &= Q(order_date__lte=end_date)
+            item_order_date_q &= Q(purchase_order__order_date__lte=end_date)
 
-        orders = apply_erp_tenant_scope(PurchaseOrder.objects.all(), user=user).filter(base_q).exclude(status='CANCELLED')
+        orders = apply_erp_tenant_scope(PurchaseOrder.objects.all(), user=user).filter(order_date_q).exclude(status='CANCELLED')
         order_items = apply_erp_tenant_scope(PurchaseOrderItem.objects.all(), user=user).filter(
-            base_q & ~Q(purchase_order__status='CANCELLED')
+            item_order_date_q & ~Q(purchase_order__status='CANCELLED')
         )
 
         by_supplier = list(

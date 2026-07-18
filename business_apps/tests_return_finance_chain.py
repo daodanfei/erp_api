@@ -499,6 +499,101 @@ class ReturnFinanceChainTest(TestCase):
             "销售退货数量超出可退范围：退货商品，已发货5.000，其他退货已占用0.000，本次申请6.000",
         )
 
+    @patch("core_apps.common.permissions.has_erp_role_permission", return_value=True)
+    @patch("business_apps.supply_chain.services.get_policy")
+    @patch("business_apps.supply_chain.services.CodeRuleService.generate", return_value="SR-REF-SUBMIT-001")
+    def test_sales_return_submit_accepts_order_visible_through_reference_scope(
+        self,
+        _mocked_generate,
+        mocked_supply_chain_policy,
+        _mocked_has_permission,
+    ):
+        mocked_supply_chain_policy.return_value = self._supply_chain_policy()
+        sales_order = SalesOrder.objects.create(
+            tenant=self.tenant,
+            order_no="SO-RETURN-REF-001",
+            customer=self.customer,
+            customer_name_snapshot=self.customer.customer_name,
+            status=SalesOrder.STATUS_SHIPPED,
+            total_quantity=Decimal("2.000"),
+            total_amount=Decimal("20.00"),
+            created_by=self.approver,
+        )
+        SalesOrderItem.objects.create(
+            tenant=self.tenant,
+            order=sales_order,
+            product=self.product,
+            product_name_snapshot=self.product.name,
+            warehouse=self.warehouse,
+            quantity=Decimal("2.000"),
+            unit_price=Decimal("10.00"),
+            amount=Decimal("20.00"),
+            shipped_quantity=Decimal("2.000"),
+        )
+
+        response = self.api_client.post(
+            "/api/supply-chain/sales-returns/",
+            {
+                "customer": self.customer.id,
+                "sales_order": sales_order.id,
+                "warehouse": self.warehouse.id,
+                "reason": "引用权限提交",
+                "items": [{"product": self.product.id, "quantity": "1.000"}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["sales_order"], sales_order.id)
+
+    @patch("core_apps.common.permissions.has_erp_role_permission", return_value=True)
+    @patch("core_apps.common.permissions.TenantService.get_runtime_config")
+    @patch("business_apps.ar_receivable.services.get_policy")
+    @patch("business_apps.ar_receivable.services.ARService.generate_no", return_value="RC-REF-SUBMIT-001")
+    def test_receipt_submit_accepts_customer_and_cash_account_from_reference_scope(
+        self,
+        _mocked_generate_no,
+        mocked_ar_policy,
+        mocked_runtime_config,
+        _mocked_has_permission,
+    ):
+        mocked_ar_policy.return_value = SimpleNamespace(receipt_approval_enabled=lambda: True)
+        mocked_runtime_config.return_value = SimpleNamespace(
+            is_enabled=lambda module_key: module_key in {"ar_receivable", "crm", "finance"}
+        )
+        referenced_customer = Customer.objects.create(
+            tenant=self.tenant,
+            customer_code="RETURN-CUS-REF-002",
+            customer_name="其他负责人客户",
+            owner=self.approver,
+            created_by=self.approver,
+            status="ACTIVE",
+        )
+        cash_account = CashAccount.objects.create(
+            tenant=self.tenant,
+            name="引用资金账户",
+            type="BANK",
+            account_type="BANK",
+            status=True,
+        )
+
+        response = self.api_client.post(
+            "/api/ar-receivable/receipts/",
+            {
+                "customer": referenced_customer.id,
+                "cash_account": cash_account.id,
+                "amount": "100.00",
+                "receipt_date": "2026-07-18",
+                "payment_method": "BANK_TRANSFER",
+                "reference_no": "REF-SUBMIT",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["customer"], referenced_customer.id)
+        self.assertEqual(response.data["cash_account"], cash_account.id)
+
     @patch("business_apps.ap_payable.services.get_policy")
     @patch("business_apps.inventory.services.get_policy")
     @patch("business_apps.accounting.services.get_policy")

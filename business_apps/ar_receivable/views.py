@@ -118,7 +118,7 @@ class ReceiptViewSet(BaseBusinessViewSet):
 
     def create(self, request, *args, **kwargs):
         try:
-            customer = self.get_scoped_related_object(Customer.objects.all(), id=request.data.get('customer'))
+            customer = self.get_tenant_scoped_related_object(Customer.objects.all(), id=request.data.get('customer'))
             amount = float(request.data.get('amount'))
             receipt_date = request.data.get('receipt_date')
             payment_method = request.data.get('payment_method')
@@ -129,7 +129,7 @@ class ReceiptViewSet(BaseBusinessViewSet):
                 receipt_date=receipt_date,
                 payment_method=payment_method,
                 cash_account=(
-                    self.get_scoped_related_object(CashAccount.objects.all(), id=request.data.get('cash_account'))
+                    self.get_tenant_scoped_related_object(CashAccount.objects.all(), id=request.data.get('cash_account'))
                     if request.data.get('cash_account') else None
                 ),
                 operator=request.user,

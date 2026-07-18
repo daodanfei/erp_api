@@ -74,11 +74,81 @@ class OutboundService:
         )
 
     @staticmethod
+    def _bind_sales_order_items(sales_order, items_data):
+        """Validate manual outbound lines and bind them to sales order lines."""
+        from business_apps.sales.models import SalesOrderItem
+        from business_apps.sales.services import SalesOrderService
+
+        source_items = list(
+            SalesOrderItem.objects.select_for_update()
+            .filter(order=sales_order)
+            .select_related('product')
+            .order_by('id')
+        )
+        source_by_product = {}
+        for source_item in source_items:
+            open_quantity = SalesOrderService.get_open_outbound_quantity(source_item)
+            available_quantity = (
+                Decimal(str(source_item.quantity))
+                - Decimal(str(source_item.shipped_quantity))
+                - open_quantity
+            )
+            if available_quantity > 0:
+                source_by_product.setdefault(source_item.product_id, []).append(
+                    [source_item, available_quantity]
+                )
+
+        bound_items = []
+        for item in items_data:
+            product = item['product']
+            remaining = Decimal(str(item['quantity']))
+            if remaining <= 0:
+                raise ValueError(f"出库数量必须大于0：{product.name}")
+
+            candidates = source_by_product.get(product.id, [])
+            if not candidates:
+                raise ValueError(f"销售单不包含商品或已无待出库数量：{product.name}")
+
+            for source_item, available_quantity in candidates:
+                if remaining <= 0:
+                    break
+                allocated_quantity = min(remaining, available_quantity)
+                if allocated_quantity <= 0:
+                    continue
+                bound_items.append({
+                    **item,
+                    'sales_order_item': source_item,
+                    'quantity': allocated_quantity,
+                    'unit_price': source_item.unit_price,
+                })
+                remaining -= allocated_quantity
+                available_quantity -= allocated_quantity
+                # Keep the mutable availability shared with later duplicate input lines.
+                for candidate in candidates:
+                    if candidate[0].id == source_item.id:
+                        candidate[1] = available_quantity
+                        break
+
+            if remaining > 0:
+                ordered_quantity = sum(
+                    (Decimal(str(line.quantity)) for line in source_items if line.product_id == product.id),
+                    Decimal('0'),
+                )
+                raise ValueError(
+                    f"商品 {product.name} 的出库数量超过销售单待出库数量"
+                    f"（订单数量 {ordered_quantity}）"
+                )
+
+        return bound_items
+
+    @staticmethod
     @transaction.atomic
     def create_order(sales_order, warehouse, items_data, user, remark=None):
         if sales_order and sales_order.customer.status == 'BLACKLIST':
             raise ValueError("黑名单客户禁止创建出库单")
         OutboundService.validate_products(items_data)
+        if sales_order and any(not item.get('sales_order_item') for item in items_data):
+            items_data = OutboundService._bind_sales_order_items(sales_order, items_data)
         order = OutboundOrder.objects.create(
             tenant=sales_order.tenant if sales_order else warehouse.tenant,
             outbound_no=OutboundService.generate_no(),

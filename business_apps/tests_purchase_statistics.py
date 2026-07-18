@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import date
 
 from django.test import TestCase
 
@@ -138,3 +139,28 @@ class PurchaseStatisticsTenantIsolationTest(TestCase):
         self.assertEqual(product_names, ["Tenant A Product"])
         self.assertEqual(stats["total_orders"], 1)
         self.assertEqual(stats["total_amount"], Decimal("100.00"))
+
+    def test_get_statistics_applies_date_range_to_all_aggregations(self):
+        order = PurchaseOrder.objects.get(purchase_order_no="PO-STATS-A-001")
+        PurchaseOrder.objects.filter(pk=order.pk).update(order_date=date(2026, 1, 15))
+
+        included = PurchaseOrderService.get_statistics(
+            self.user,
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+        )
+        excluded = PurchaseOrderService.get_statistics(
+            self.user,
+            start_date="2026-02-01",
+            end_date="2026-02-28",
+        )
+
+        self.assertEqual(included["total_orders"], 1)
+        self.assertEqual(included["by_status"], {PurchaseOrder.STATUS_APPROVED: 1})
+        self.assertEqual([item["product_name_snapshot"] for item in included["by_product"]], ["Tenant A Product"])
+        self.assertEqual(excluded["total_orders"], 0)
+        self.assertEqual(excluded["total_amount"], Decimal("0"))
+        self.assertEqual(excluded["by_status"], {})
+        self.assertEqual(excluded["by_supplier"], [])
+        self.assertEqual(excluded["by_product"], [])
+        self.assertEqual(excluded["by_month"], [])

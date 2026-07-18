@@ -23,6 +23,8 @@ class SalesOrderViewSet(BaseBusinessViewSet):
     queryset = SalesOrder.objects.all()
     serializer_class = SalesOrderSerializer
     user_field = 'created_by'
+    filterset_fields = ['status', 'customer']
+    search_fields = ['order_no', 'customer_name_snapshot', 'customer__customer_name']
     
     permission_map = {
         'list': 'sales:order:view',
@@ -48,7 +50,7 @@ class SalesOrderViewSet(BaseBusinessViewSet):
 
     @action(detail=False, methods=['get'], url_path='reference-options')
     def reference_options(self, request):
-        queryset = self.get_tenant_scoped_queryset().order_by('-order_date', '-id')
+        queryset = self.get_tenant_scoped_queryset().prefetch_related('items__product').order_by('-order_date', '-id')
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 

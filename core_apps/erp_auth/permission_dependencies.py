@@ -72,11 +72,13 @@ ERP_PERMISSION_DEPENDENCIES: dict[str, tuple[str, ...]] = {
         "crm:customer:reference",
         "inventory:product:reference",
         "inventory:warehouse:reference",
+        "sales:order:reference",
     ),
     "supply_chain:sales_return:update": (
         "crm:customer:reference",
         "inventory:product:reference",
         "inventory:warehouse:reference",
+        "sales:order:reference",
     ),
     "supply_chain:purchase_return:create": (
         "supplier:supplier:reference",

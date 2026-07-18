@@ -1,4 +1,5 @@
 from decimal import Decimal
+from types import SimpleNamespace
 
 from django.test import TestCase
 from rest_framework import status
@@ -961,6 +962,28 @@ class ERPUserManagementApiTest(APITestCase):
         self.staff_role.refresh_from_db()
         self.assertTrue(self.staff_role.permissions.filter(id=sales_order_reference.id).exists())
 
+    def test_sales_return_create_permission_adds_sales_order_reference_dependency(self):
+        for module_key in ("supply_chain", "sales"):
+            TenantModuleState.objects.update_or_create(
+                tenant=self.tenant,
+                module_key=module_key,
+                defaults={"enabled": True},
+            )
+        sales_return_create, _ = ERPPermission.objects.get_or_create(
+            code="supply_chain:sales_return:create",
+            defaults={"name": "创建销售退货单", "type": "BUTTON"},
+        )
+        sales_order_reference, _ = ERPPermission.objects.get_or_create(
+            code="sales:order:reference",
+            defaults={"name": "引用销售订单", "type": "BUTTON"},
+        )
+        self.staff_role.permissions.set([sales_return_create])
+
+        sync_role_reference_permissions(tenant=self.tenant)
+
+        self.staff_role.refresh_from_db()
+        self.assertTrue(self.staff_role.permissions.filter(id=sales_order_reference.id).exists())
+
     def test_user_reference_options_uses_reference_permission_only(self):
         user_reference = ERPPermission.objects.get(code="system:user:reference")
         self.staff_role.permissions.set([user_reference])
@@ -1306,6 +1329,8 @@ class ERPUserManagementApiTest(APITestCase):
         order_numbers = {item["order_no"] for item in reference_response.data}
         self.assertIn(order.order_no, order_numbers)
         self.assertNotIn("SO-REF-OTHER", order_numbers)
+        referenced_order = next(item for item in reference_response.data if item["id"] == order.id)
+        self.assertIn("items", referenced_order)
 
     def test_permission_list_hides_doc_marked_pages_for_erp(self):
         self.login()
@@ -1821,6 +1846,60 @@ class ERPUserSalesOutboundFlowTest(TestCase):
             operator=self.erp_user,
             remark="seed sales stock",
         )
+
+    def test_manual_outbound_linked_to_sales_order_restricts_product_and_quantity(self):
+        order = SalesOrderService.create_order(
+            customer=self.customer,
+            items_data=[{
+                "product": self.product,
+                "warehouse": self.warehouse,
+                "quantity": "5.000",
+                "unit_price": "15.00",
+            }],
+            user=self.erp_user,
+        )
+        other_product = Product.objects.create(
+            product_code="ERP-S002",
+            name="Not Ordered Product",
+            category=self.category,
+            unit=self.unit,
+            cost_price="8.00",
+            sale_price="12.00",
+            status="ACTIVE",
+        )
+
+        with self.assertRaisesRegex(ValueError, "销售单不包含商品"):
+            OutboundService.create_order(
+                order,
+                self.warehouse,
+                [{"product": other_product, "quantity": "1.000"}],
+                self.erp_user,
+            )
+
+        with self.assertRaisesRegex(ValueError, "超过销售单待出库数量"):
+            OutboundService.create_order(
+                order,
+                self.warehouse,
+                [{"product": self.product, "quantity": "5.001"}],
+                self.erp_user,
+            )
+
+        outbound = OutboundService.create_order(
+            order,
+            self.warehouse,
+            [{"product": self.product, "quantity": "3.000"}],
+            self.erp_user,
+        )
+        outbound_item = outbound.items.get()
+        self.assertEqual(outbound_item.sales_order_item, order.items.get())
+
+        with self.assertRaisesRegex(ValueError, "超过销售单待出库数量"):
+            OutboundService.create_order(
+                order,
+                self.warehouse,
+                [{"product": self.product, "quantity": "2.001"}],
+                self.erp_user,
+            )
 
     @patch("business_apps.accounting.services.PostingService.post_sales_outbound")
     @patch("business_apps.ar_receivable.services.ARService.generate_ar_from_outbound")
@@ -2469,6 +2548,7 @@ class ERPUserMasterDataApiTest(APITestCase):
         )
         self.assertEqual(customer_response.status_code, status.HTTP_201_CREATED)
         customer = Customer.objects.get(id=customer_response.data["id"])
+        self.assertEqual(customer.status, "ACTIVE")
 
         follow_response = self.client.post(
             "/api/crm/follow-records/",
@@ -2496,6 +2576,34 @@ class ERPUserMasterDataApiTest(APITestCase):
         self.assertIsNone(customer.created_by)
         self.assertIsNone(FollowRecord.objects.get(id=follow_response.data["id"]).created_by)
         self.assertIsNone(CustomerAttachment.objects.get(id=attachment_response.data["id"]).uploaded_by)
+
+    @patch("business_apps.crm.views.generate_customer_code", return_value="CUS-ACTIVE-001")
+    @patch("business_apps.crm.views.get_policy")
+    def test_customer_create_preserves_selected_active_status_when_approval_feature_is_enabled(
+        self,
+        mocked_policy,
+        _mocked_generate_code,
+    ):
+        mocked_policy.return_value = SimpleNamespace(
+            approval_enabled=lambda: True,
+            code_auto_generate_enabled=lambda: True,
+            credit_limit_enabled=lambda: True,
+        )
+
+        response = self.client.post(
+            "/api/crm/customers/",
+            {
+                "customer_name": "激活状态客户",
+                "customer_type": "COMPANY",
+                "customer_level": "C",
+                "status": "ACTIVE",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["status"], "ACTIVE")
+        self.assertEqual(Customer.objects.get(id=response.data["id"]).status, "ACTIVE")
 
     def test_erp_user_can_create_supplier_follow_record_evaluation_and_attachment_with_erp_owner(self):
         supplier_response = self.client.post(

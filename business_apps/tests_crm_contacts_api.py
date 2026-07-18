@@ -74,6 +74,32 @@ class CRMContactPermissionApiTest(APITestCase):
                 self.assertEqual(allowed.status_code, status.HTTP_201_CREATED, allowed.data)
                 self.assertTrue(Contact.objects.filter(customer=self.customer, name="新联系人").exists())
 
+    def test_customer_search_filters_by_name_phone_and_code(self):
+        Customer.objects.create(
+            tenant=self.tenant,
+            customer_code="CRM-CUST-SEARCH-002",
+            customer_name="另一个客户",
+            customer_level="B",
+            phone="13912345678",
+            owner=self.user,
+            dept=self.dept,
+            created_by=self.user,
+            status="ACTIVE",
+        )
+
+        with patch("core_apps.common.permissions.TenantService.get_runtime_config", return_value=self._runtime_config()):
+            with self._permission_patch({"crm:customer:view"}):
+                by_name = self.client.get("/api/crm/customers/", {"search": "测试客户"})
+                by_phone = self.client.get("/api/crm/customers/", {"search": "139123"})
+                by_code = self.client.get("/api/crm/customers/", {"search": "SEARCH-002"})
+                by_level = self.client.get("/api/crm/customers/", {"customer_level": "B"})
+
+        self.assertEqual(by_name.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["id"] for row in by_name.data], [self.customer.id])
+        self.assertEqual([row["customer_name"] for row in by_phone.data], ["另一个客户"])
+        self.assertEqual([row["customer_name"] for row in by_code.data], ["另一个客户"])
+        self.assertEqual([row["customer_name"] for row in by_level.data], ["另一个客户"])
+
     def test_update_contact_requires_update_permission(self):
         with patch("core_apps.common.permissions.TenantService.get_runtime_config", return_value=self._runtime_config()):
             with self._permission_patch({"crm:customer:view"}):

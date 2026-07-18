@@ -2,6 +2,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter
 from django.utils import timezone
 from django.db.models import Count, Sum
 from django.db.models.functions import TruncMonth
@@ -39,8 +40,9 @@ class CustomerViewSet(BaseBusinessViewSet):
         'sales_statistics': 'crm:customer:view',
         'credit_overview': 'crm:customer:view',
     }
-    filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['status']
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['status', 'customer_level', 'customer_type']
+    search_fields = ['customer_code', 'customer_name', 'short_name', 'phone', 'email']
 
     def get_serializer_class(self):
         if self.action == 'reference_options':
@@ -80,7 +82,7 @@ class CustomerViewSet(BaseBusinessViewSet):
 
         serializer.save(
             customer_code=customer_code,
-            status='INACTIVE' if policy.approval_enabled() else serializer.validated_data.get('status', 'ACTIVE'),
+            status=serializer.validated_data.get('status', 'ACTIVE'),
             owner=self.request.user if isinstance(self.request.user, ERPUser) else None,
             **build_erp_tenant_save_kwargs(Customer, user=self.request.user),
             **extra_values,

@@ -23,6 +23,8 @@ MODULE = ModuleDefinition(
             "component": "sales/OrderList",
             "icon": "OrderedListOutlined",
             "order": 401,
+            "navigation_group": "sales_center",
+            "navigation_order": 102,
         },
         {
             "code": "sales:stats",
@@ -32,6 +34,8 @@ MODULE = ModuleDefinition(
             "component": "sales/SalesStats",
             "icon": "BarChartOutlined",
             "order": 402,
+            "navigation_group": "sales_center",
+            "navigation_order": 104,
         },
         {
             "code": "sales:order:detail",
@@ -66,6 +70,7 @@ MODULE = ModuleDefinition(
     ),
     permissions=(
         {"code": "sales:order:view", "name": "查看订单", "parent": "sales:order"},
+        {"code": "sales:stats:view", "name": "查看销售统计", "parent": "sales:stats"},
         {"code": "sales:order:reference", "name": "引用销售订单", "parent": "sales:order"},
         {"code": "sales:order:create", "name": "创建订单", "parent": "sales:order"},
         {"code": "sales:order:update", "name": "编辑订单", "parent": "sales:order"},

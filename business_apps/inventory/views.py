@@ -522,6 +522,10 @@ class InventoryTransactionViewSet(ModuleAwareReadOnlyViewSet):
     queryset = InventoryTransaction.objects.all()
     serializer_class = InventoryTransactionSerializer
     filterset_fields = ['warehouse', 'product', 'transaction_type']
+    permission_map = {
+        'list': 'inventory:transaction:view',
+        'retrieve': 'inventory:transaction:view',
+    }
 
 class StocktakeViewSet(ModuleAwareModelViewSet):
     module_key = MODULE_KEY

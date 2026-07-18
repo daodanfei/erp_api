@@ -7,6 +7,7 @@ from core_apps.erp_auth.permission_dependencies import ERP_PERMISSION_DEPENDENCI
 from core_apps.modules import get_business_modules, get_core_modules, get_erp_permission_modules
 
 from .services import ConfigurationService
+from .navigation import build_navigation_catalog
 
 
 class ConfigurationValidationView(APIView):
@@ -46,6 +47,14 @@ class ConfigurationModuleCatalogView(APIView):
                 for module in modules
             ]
         )
+
+
+class ConfigurationNavigationCatalogView(APIView):
+    permission_classes = [permissions.IsAuthenticated, PlatformUserOnly]
+
+    def get(self, request):
+        modules = (*get_core_modules(), *get_business_modules())
+        return Response(build_navigation_catalog(modules))
 
 
 class ConfigurationPermissionDependencyView(APIView):

@@ -30,7 +30,7 @@ class ReceivableViewSet(BaseBusinessViewSet):
         'retrieve': 'ar:receivable:view',
         'update': 'ar:receivable:update',
         'generate': 'ar:receivable:generate',
-        'aging_analysis': 'ar:receivable:view',
+        'aging_analysis': 'ar:aging:view',
     }
 
     @action(detail=False, methods=['post'])

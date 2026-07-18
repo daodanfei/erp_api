@@ -17,12 +17,15 @@ MODULE = ModuleDefinition(
         },
         {
             "code": "platform:file",
-            "name": "文件中心",
+            "name": "文档中心",
             "parent": "platform",
             "path": "/platform/files",
             "component": "platform/FileCenter",
             "icon": "FolderOutlined",
             "order": 901,
+            "navigation_group": "system_settings",
+            "navigation_order": 604,
+            "feature_key": "file_center",
         },
         {
             "code": "platform:dict",

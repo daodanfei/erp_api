@@ -23,6 +23,8 @@ MODULE = ModuleDefinition(
             "component": "inventory/CategoryList",
             "icon": "BarsOutlined",
             "order": 301,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 301,
         },
         {
             "code": "inventory:unit",
@@ -32,6 +34,8 @@ MODULE = ModuleDefinition(
             "component": "inventory/UnitList",
             "icon": "FontSizeOutlined",
             "order": 302,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 302,
         },
         {
             "code": "inventory:product",
@@ -41,6 +45,8 @@ MODULE = ModuleDefinition(
             "component": "inventory/ProductList",
             "icon": "ShoppingOutlined",
             "order": 303,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 303,
         },
         {
             "code": "inventory:product:detail",
@@ -80,6 +86,9 @@ MODULE = ModuleDefinition(
             "component": "inventory/WarehouseList",
             "icon": "HomeOutlined",
             "order": 307,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 304,
+            "feature_key": "multi_warehouse",
         },
         {
             "code": "inventory:query",
@@ -89,6 +98,8 @@ MODULE = ModuleDefinition(
             "component": "inventory/InventoryList",
             "icon": "MonitorOutlined",
             "order": 308,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 310,
         },
         {
             "code": "inventory:transaction",
@@ -98,6 +109,8 @@ MODULE = ModuleDefinition(
             "component": "inventory/TransactionList",
             "icon": "HistoryOutlined",
             "order": 309,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 311,
         },
         {
             "code": "inventory:stocktake",
@@ -107,6 +120,9 @@ MODULE = ModuleDefinition(
             "component": "inventory/StocktakeList",
             "icon": "CheckSquareOutlined",
             "order": 310,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 308,
+            "feature_key": "stocktake",
         },
         {
             "code": "inventory:stocktake:detail",
@@ -145,6 +161,7 @@ MODULE = ModuleDefinition(
         {"code": "inventory:inventory:view", "name": "查看库存", "parent": "inventory:query"},
         {"code": "inventory:inventory:reference", "name": "引用库存", "parent": "inventory:query"},
         {"code": "inventory:inventory:adjust", "name": "手工调整库存", "parent": "inventory:query"},
+        {"code": "inventory:transaction:view", "name": "查看库存流水", "parent": "inventory:transaction"},
         {"code": "inventory:stocktake:view", "name": "查看盘点单", "parent": "inventory:stocktake"},
         {"code": "inventory:stocktake:create", "name": "创建盘点单", "parent": "inventory:stocktake"},
         {"code": "inventory:stocktake:update", "name": "编辑盘点单", "parent": "inventory:stocktake"},

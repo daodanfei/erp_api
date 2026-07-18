@@ -132,6 +132,42 @@ class ModuleRegistryTests(SimpleTestCase):
         with self.assertRaisesMessage(ModuleRegistryError, "Unknown module dependencies"):
             validate_modules([module_definition("inventory", depends_on=("platform",))])
 
+    def test_validate_modules_rejects_role_editor_button_on_module_root(self):
+        module = module_definition(
+            "inventory",
+            menus=(
+                {"code": "inventory", "name": "库存", "path": "/inventory"},
+                {"code": "inventory:product", "name": "商品", "path": "/inventory/products", "component": "inventory/ProductList", "parent": "inventory"},
+            ),
+            permissions=(
+                {"code": "inventory:product:view", "name": "查看商品", "parent": "inventory:product"},
+                {"code": "inventory:product:update", "name": "编辑商品", "parent": "inventory"},
+            ),
+        )
+        with self.assertRaisesMessage(ModuleRegistryError, "must belong to visible page menus"):
+            validate_modules([module])
+
+    def test_validate_modules_allows_internal_button_on_module_root(self):
+        module = module_definition(
+            "inventory",
+            menus=({"code": "inventory", "name": "库存", "path": "/inventory"},),
+            permissions=(
+                {"code": "inventory:export:view", "name": "导出任务", "parent": "inventory", "role_editor_visible": False},
+            ),
+        )
+        validate_modules([module])
+
+    def test_validate_modules_rejects_visible_page_without_view_permission(self):
+        module = module_definition(
+            "inventory",
+            menus=(
+                {"code": "inventory", "name": "库存", "path": "/inventory"},
+                {"code": "inventory:transaction", "name": "库存流水", "path": "/inventory/transactions", "component": "inventory/TransactionList", "parent": "inventory"},
+            ),
+        )
+        with self.assertRaisesMessage(ModuleRegistryError, "must declare a role-editor view permission"):
+            validate_modules([module])
+
     def test_load_business_modules_reports_missing_manifest_file(self):
         packages = [SimpleNamespace(name="inventory", ispkg=True)]
 

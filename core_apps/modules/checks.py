@@ -111,6 +111,7 @@ def _ensure_menu_integrity(modules: list[object]) -> None:
     _ensure_item_field_uniqueness(menus, "menu", "code")
     _ensure_item_field_uniqueness(menus, "menu", "path")
     _ensure_menu_parents_exist(menus)
+    _ensure_visible_pages_have_view_permissions(modules, menus)
 
 
 def _ensure_permission_integrity(modules: list[object]) -> None:
@@ -123,6 +124,7 @@ def _ensure_permission_integrity(modules: list[object]) -> None:
     _ensure_item_field_uniqueness(permissions, "permission", "code")
     _ensure_menu_and_permission_codes_do_not_overlap(modules, permissions)
     _ensure_permission_parents_exist(modules, permissions)
+    _ensure_role_editor_permissions_belong_to_pages(modules, permissions)
 
 
 def _ensure_manifest_item_fields(
@@ -212,6 +214,53 @@ def _ensure_menu_and_permission_codes_do_not_overlap(
         raise ModuleRegistryError(
             "Menu codes and permission codes must not overlap: "
             + ", ".join(overlaps)
+        )
+
+
+def _ensure_role_editor_permissions_belong_to_pages(
+    modules: list[object], permissions: list[tuple[str, dict]],
+) -> None:
+    menus = {
+        menu["code"]: menu
+        for module in modules
+        for menu in getattr(module, "menus", ())
+    }
+    invalid: list[str] = []
+    for module_key, permission in permissions:
+        if permission["code"].endswith(":reference") or not permission.get("role_editor_visible", True):
+            continue
+        parent = menus[permission["parent"]]
+        if not parent.get("component") or parent.get("hide_in_menu", False):
+            invalid.append(f"{module_key}:{permission['code']}->{permission['parent']}")
+    if invalid:
+        raise ModuleRegistryError(
+            "Role-editor button permissions must belong to visible page menus: "
+            + ", ".join(sorted(invalid))
+        )
+
+
+def _ensure_visible_pages_have_view_permissions(
+    modules: list[object], menus: list[tuple[str, dict]],
+) -> None:
+    permission_parents = {
+        permission.get("parent")
+        for module in modules
+        for permission in getattr(module, "permissions", ())
+        if permission.get("code", "").endswith(":view")
+        and permission.get("role_editor_visible", True)
+    }
+    missing = [
+        f"{module_key}:{menu['code']}"
+        for module_key, menu in menus
+        if menu.get("component")
+        and not menu.get("hide_in_menu", False)
+        and menu.get("role_editor_visible", True)
+        and menu["code"] not in permission_parents
+    ]
+    if missing:
+        raise ModuleRegistryError(
+            "Visible page menus must declare a role-editor view permission: "
+            + ", ".join(sorted(missing))
         )
 
 

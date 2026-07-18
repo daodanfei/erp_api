@@ -23,6 +23,8 @@ MODULE = ModuleDefinition(
             "component": "supplyChain/OutboundList",
             "icon": "ExportOutlined",
             "order": 701,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 306,
         },
         {
             "code": "supply_chain:outbound:detail",
@@ -36,12 +38,15 @@ MODULE = ModuleDefinition(
         },
         {
             "code": "supply_chain:transfer",
-            "name": "仓库调拨",
+            "name": "库存调拨",
             "parent": "supply_chain",
             "path": "/supply-chain/transfer",
             "component": "supplyChain/TransferList",
             "icon": "SwapOutlined",
             "order": 703,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 307,
+            "feature_key": "transfer_enabled",
         },
         {
             "code": "supply_chain:transfer:detail",
@@ -61,6 +66,9 @@ MODULE = ModuleDefinition(
             "component": "supplyChain/SalesReturnList",
             "icon": "RollbackOutlined",
             "order": 705,
+            "navigation_group": "sales_center",
+            "navigation_order": 103,
+            "feature_key": "sales_return_enabled",
         },
         {
             "code": "supply_chain:sales_return:detail",
@@ -80,6 +88,9 @@ MODULE = ModuleDefinition(
             "component": "supplyChain/PurchaseReturnList",
             "icon": "UndoOutlined",
             "order": 707,
+            "navigation_group": "purchase_center",
+            "navigation_order": 203,
+            "feature_key": "purchase_return_enabled",
         },
         {
             "code": "supply_chain:purchase_return:detail",
@@ -99,6 +110,9 @@ MODULE = ModuleDefinition(
             "component": "supplyChain/AlertList",
             "icon": "AlertOutlined",
             "order": 709,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 309,
+            "feature_key": "inventory_alert_enabled",
         },
         {
             "code": "supply_chain:trace",
@@ -108,6 +122,9 @@ MODULE = ModuleDefinition(
             "component": "supplyChain/TraceList",
             "icon": "AuditOutlined",
             "order": 710,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 312,
+            "feature_key": "trace_enabled",
         },
     ),
     permissions=(

@@ -42,8 +42,8 @@ class APAccountViewSet(BaseBusinessViewSet):
         'retrieve': 'ap:account:view',
         'update': 'ap:account:update',
         'statistics': 'ap:account:view',
-        'supplier_summary': 'ap:account:view',
-        'aging': 'ap:account:view',
+        'supplier_summary': 'ap:summary:view',
+        'aging': 'ap:aging:view',
     }
 
     @action(detail=False, methods=['get'])

@@ -43,7 +43,7 @@ class PurchaseOrderViewSet(BaseBusinessViewSet):
         'reject': 'purchase:order:approve',
         'close': 'purchase:order:update',
         'cancel': 'purchase:order:cancel',
-        'statistics': 'purchase:order:view',
+        'statistics': 'purchase:stats:view',
         'upload_attachment': 'purchase:order:update',
         'delete_attachment': 'purchase:order:update',
     }

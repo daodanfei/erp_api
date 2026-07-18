@@ -2,6 +2,20 @@ from __future__ import annotations
 
 
 ERP_PERMISSION_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    # Roles created before aging analysis had an action permission only carry
+    # the page menu. Preserve their access when permissions are resynchronized.
+    "ar:aging": ("ar:aging:view",),
+    "ar:aging:view": ("crm:customer:reference",),
+    "ap:aging": ("ap:aging:view",),
+    "ap:aging:view": ("supplier:supplier:reference",),
+    "ap:summary": ("ap:summary:view",),
+    "inventory:transaction": ("inventory:transaction:view",),
+    "purchase:stats": ("purchase:stats:view",),
+    "sales:stats": ("sales:stats:view",),
+    "system:log": ("system:log:view",),
+    "system:user": ("system:user:view",),
+    "system:dept": ("system:dept:view",),
+    "system:role": ("system:role:view",),
     "inventory:warehouse:create": ("system:user:reference",),
     "inventory:warehouse:update": ("system:user:reference",),
     "inventory:product:create": ("inventory:category:reference", "inventory:unit:reference"),

@@ -25,6 +25,7 @@ ERP_DEFAULT_HIDDEN_PERMISSION_PREFIXES = (
 SYSTEM_FEATURE_PERMISSION_CODES = {
     "user_management": {
         "system:user",
+        "system:user:view",
         "system:user:reference",
         "user:create",
         "user:update",
@@ -32,6 +33,7 @@ SYSTEM_FEATURE_PERMISSION_CODES = {
     },
     "department_management": {
         "system:dept",
+        "system:dept:view",
         "system:dept:reference",
         "dept:create",
         "dept:update",
@@ -39,12 +41,14 @@ SYSTEM_FEATURE_PERMISSION_CODES = {
     },
     "role_management": {
         "system:role",
+        "system:role:view",
         "role:create",
         "role:update",
         "role:delete",
     },
     "operation_log": {
         "system:log",
+        "system:log:view",
     },
     "permission_management": {
         "system:perm",
@@ -83,6 +87,7 @@ def _iter_erp_permission_definitions():
                 "component": menu.get("component"),
                 "icon": menu.get("icon"),
                 "hide_in_menu": menu.get("hide_in_menu", False),
+                "role_editor_visible": menu.get("role_editor_visible", not menu.get("hide_in_menu", False)),
                 "order": menu.get("order", 0),
                 "status": menu.get("status", True),
             }
@@ -96,6 +101,7 @@ def _iter_erp_permission_definitions():
                 "component": permission.get("component"),
                 "icon": permission.get("icon"),
                 "hide_in_menu": permission.get("hide_in_menu", False),
+                "role_editor_visible": permission.get("role_editor_visible", True),
                 "order": permission.get("order", 0),
                 "status": permission.get("status", True),
             }
@@ -146,6 +152,7 @@ def sync_erp_permissions() -> dict[str, ERPPermission]:
             "component": definition.get("component"),
             "icon": definition.get("icon"),
             "hide_in_menu": definition.get("hide_in_menu", False),
+            "role_editor_visible": definition.get("role_editor_visible", True),
             "order": definition.get("order", 0),
             "status": definition.get("status", True),
         }

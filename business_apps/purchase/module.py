@@ -23,6 +23,8 @@ MODULE = ModuleDefinition(
             "component": "purchase/OrderList",
             "icon": "OrderedListOutlined",
             "order": 601,
+            "navigation_group": "purchase_center",
+            "navigation_order": 202,
         },
         {
             "code": "purchase:order:detail",
@@ -62,6 +64,8 @@ MODULE = ModuleDefinition(
             "component": "purchase/ReceiptList",
             "icon": "InboxOutlined",
             "order": 605,
+            "navigation_group": "warehouse_logistics",
+            "navigation_order": 305,
         },
         {
             "code": "purchase:stats",
@@ -71,10 +75,13 @@ MODULE = ModuleDefinition(
             "component": "purchase/PurchaseStats",
             "icon": "BarChartOutlined",
             "order": 606,
+            "navigation_group": "purchase_center",
+            "navigation_order": 204,
         },
     ),
     permissions=(
         {"code": "purchase:order:view", "name": "查看采购订单", "parent": "purchase:order"},
+        {"code": "purchase:stats:view", "name": "查看采购统计", "parent": "purchase:stats"},
         {"code": "purchase:order:create", "name": "创建采购订单", "parent": "purchase:order"},
         {"code": "purchase:order:update", "name": "编辑采购订单", "parent": "purchase:order"},
         {"code": "purchase:order:delete", "name": "删除采购订单", "parent": "purchase:order"},

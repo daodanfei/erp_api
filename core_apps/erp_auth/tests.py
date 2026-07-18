@@ -800,6 +800,7 @@ class ERPUserManagementApiTest(APITestCase):
     def test_role_crud_supports_permission_binding(self):
         self.login()
         menu_permission = ERPPermission.objects.get(code="system:user")
+        view_permission = ERPPermission.objects.get(code="system:user:view")
         button_permission = ERPPermission.objects.get(code="user:create")
 
         create_response = self.client.post(
@@ -818,7 +819,7 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertTrue(created_role.code.startswith(f"{self.tenant.code}-"))
         self.assertEqual(
             set(created_role.permissions.values_list("id", flat=True)),
-            {menu_permission.id, button_permission.id},
+            {menu_permission.id, view_permission.id, button_permission.id},
         )
 
         update_response = self.client.put(
@@ -836,7 +837,10 @@ class ERPUserManagementApiTest(APITestCase):
         created_role.refresh_from_db()
         self.assertEqual(created_role.name, "审批主管")
         self.assertFalse(created_role.status)
-        self.assertEqual(set(created_role.permissions.values_list("id", flat=True)), {menu_permission.id})
+        self.assertEqual(
+            set(created_role.permissions.values_list("id", flat=True)),
+            {menu_permission.id, view_permission.id},
+        )
 
         delete_response = self.client.delete(f"/api/erp-auth/roles/{created_role.id}/")
 
@@ -880,6 +884,44 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertEqual(update_response.status_code, status.HTTP_200_OK)
         created_role.refresh_from_db()
         self.assertFalse(created_role.permissions.filter(id=user_reference.id).exists())
+
+    def test_role_update_preserves_historical_internal_permissions(self):
+        self.login()
+        menu_permission = ERPPermission.objects.get(code="system:user")
+        internal_permission = ERPPermission.objects.get(code="finance:export_task:view")
+        self.staff_role.permissions.set([menu_permission, internal_permission])
+
+        response = self.client.put(
+            f"/api/erp-auth/roles/{self.staff_role.id}/",
+            {
+                "name": self.staff_role.name,
+                "data_scope": self.staff_role.data_scope,
+                "status": True,
+                "permission_ids": [menu_permission.id],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(self.staff_role.permissions.filter(id=internal_permission.id).exists())
+
+    def test_new_role_cannot_submit_internal_or_reference_permission(self):
+        self.login()
+        for permission in (
+            ERPPermission.objects.get(code="finance:export_task:view"),
+            ERPPermission.objects.get(code="system:user:reference"),
+        ):
+            response = self.client.post(
+                "/api/erp-auth/roles/",
+                {
+                    "name": f"非法授权-{permission.id}",
+                    "data_scope": "SELF",
+                    "status": True,
+                    "permission_ids": [permission.id],
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_sync_role_reference_permissions_updates_existing_roles(self):
         warehouse_create = ERPPermission.objects.get(code="inventory:warehouse:create")
@@ -1302,6 +1344,17 @@ class ERPUserManagementApiTest(APITestCase):
         self.assertFalse(any(code.endswith(":reference") for code in permission_codes))
         self.assertNotIn("system:user:reference", permission_codes)
         self.assertNotIn("inventory:warehouse:reference", permission_codes)
+
+    def test_permission_list_hides_hidden_routes_and_internal_permissions(self):
+        self.login()
+
+        response = self.client.get("/api/erp-auth/permissions/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        permission_codes = {item["code"] for item in response.data}
+        self.assertTrue({"crm:customer:detail", "crm:customer:new", "crm:customer:edit"}.isdisjoint(permission_codes))
+        self.assertNotIn("finance:aging:view", permission_codes)
+        self.assertFalse(any(code.startswith("finance:export_task:") for code in permission_codes))
 
     def test_system_feature_flags_filter_permissions_and_api_access(self):
         limited_version = SystemBlueprintVersion.objects.create(

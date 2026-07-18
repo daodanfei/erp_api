@@ -23,6 +23,8 @@ MODULE = ModuleDefinition(
             "component": "crm/CustomerList",
             "icon": "TeamOutlined",
             "order": 201,
+            "navigation_group": "sales_center",
+            "navigation_order": 101,
         },
         {
             "code": "crm:customer:detail",

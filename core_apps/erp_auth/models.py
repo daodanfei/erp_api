@@ -18,6 +18,7 @@ class ERPPermission(models.Model):
     component = models.CharField(max_length=200, null=True, blank=True, verbose_name="组件路径")
     icon = models.CharField(max_length=50, null=True, blank=True, verbose_name="图标")
     hide_in_menu = models.BooleanField(default=False, verbose_name="在菜单中隐藏")
+    role_editor_visible = models.BooleanField(default=True, verbose_name="在角色编辑器中显示")
     order = models.IntegerField(default=0, verbose_name="排序")
     status = models.BooleanField(default=True, verbose_name="状态")
 

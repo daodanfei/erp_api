@@ -23,6 +23,9 @@ MODULE = ModuleDefinition(
             "component": "reports/Dashboard",
             "icon": "DashboardOutlined",
             "order": 801,
+            "navigation_group": "reports_center",
+            "navigation_order": 501,
+            "feature_key": "dashboard",
         },
         {
             "code": "reports:sales",
@@ -32,6 +35,9 @@ MODULE = ModuleDefinition(
             "component": "reports/SalesAnalysis",
             "icon": "RiseOutlined",
             "order": 802,
+            "navigation_group": "reports_center",
+            "navigation_order": 502,
+            "feature_key": "sales_analysis",
         },
         {
             "code": "reports:purchase",
@@ -41,6 +47,9 @@ MODULE = ModuleDefinition(
             "component": "reports/PurchaseAnalysis",
             "icon": "FallOutlined",
             "order": 803,
+            "navigation_group": "reports_center",
+            "navigation_order": 505,
+            "feature_key": "purchase_analysis",
         },
         {
             "code": "reports:inventory",
@@ -50,6 +59,9 @@ MODULE = ModuleDefinition(
             "component": "reports/InventoryAnalysis",
             "icon": "InboxOutlined",
             "order": 804,
+            "navigation_group": "reports_center",
+            "navigation_order": 506,
+            "feature_key": "inventory_analysis",
         },
         {
             "code": "reports:customer",
@@ -59,6 +71,9 @@ MODULE = ModuleDefinition(
             "component": "reports/CustomerAnalysis",
             "icon": "TeamOutlined",
             "order": 805,
+            "navigation_group": "reports_center",
+            "navigation_order": 503,
+            "feature_key": "customer_analysis",
         },
         {
             "code": "reports:supplier",
@@ -68,6 +83,9 @@ MODULE = ModuleDefinition(
             "component": "reports/SupplierAnalysis",
             "icon": "ShopOutlined",
             "order": 806,
+            "navigation_group": "reports_center",
+            "navigation_order": 507,
+            "feature_key": "supplier_analysis",
         },
         {
             "code": "reports:product",
@@ -77,6 +95,9 @@ MODULE = ModuleDefinition(
             "component": "reports/ProductAnalysis",
             "icon": "ShoppingOutlined",
             "order": 807,
+            "navigation_group": "reports_center",
+            "navigation_order": 504,
+            "feature_key": "product_analysis",
         },
         {
             "code": "reports:export",
@@ -86,6 +107,9 @@ MODULE = ModuleDefinition(
             "component": "reports/ExportList",
             "icon": "DownloadOutlined",
             "order": 808,
+            "navigation_group": "reports_center",
+            "navigation_order": 508,
+            "feature_key": "export_center",
         },
     ),
     permissions=(

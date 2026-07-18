@@ -4,11 +4,30 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from core_apps.authentication.models import User
+from core_apps.modules import get_business_modules, get_core_modules
 
+from .navigation import build_navigation_catalog
 from .validators import validate_blueprint_config
 
 
 class ConfigurationValidationTest(SimpleTestCase):
+    def test_navigation_catalog_groups_cross_module_menus_in_fixed_order(self):
+        catalog = build_navigation_catalog((*get_core_modules(), *get_business_modules()))
+
+        self.assertEqual(
+            [group["label"] for group in catalog],
+            ["销售中心", "采购中心", "仓储物流", "财务中心", "报表中心", "系统设置"],
+        )
+        items_by_group = {
+            group["key"]: [item["code"] for item in group["items"]]
+            for group in catalog
+        }
+        self.assertEqual(
+            items_by_group["sales_center"],
+            ["crm:customer", "sales:order", "supply_chain:sales_return", "sales:stats"],
+        )
+        self.assertEqual(items_by_group["system_settings"][3], "platform:file")
+
     def test_validate_blueprint_config_accepts_stable_shape(self):
         result = validate_blueprint_config(
             {

@@ -38,7 +38,7 @@ class SalesOrderViewSet(BaseBusinessViewSet):
         'ship': 'sales:order:ship',
         'close': 'sales:order:close',
         'cancel': 'sales:order:cancel',
-        'statistics': 'sales:order:view',
+        'statistics': 'sales:stats:view',
     }
 
     def get_serializer_class(self):

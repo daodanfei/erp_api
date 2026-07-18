@@ -17,12 +17,14 @@ MODULE = ModuleDefinition(
         },
         {
             "code": "supplier:supplier",
-            "name": "供应商列表",
+            "name": "供应商管理",
             "parent": "supplier",
             "path": "/supplier/suppliers",
             "component": "supplier/SupplierList",
             "icon": "TeamOutlined",
             "order": 501,
+            "navigation_group": "purchase_center",
+            "navigation_order": 201,
         },
         {
             "code": "supplier:supplier:detail",

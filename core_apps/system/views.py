@@ -12,8 +12,8 @@ class OperationLogViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, view
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     filterset_fields = ["erp_user", "method", "status_code"]
     permission_map = {
-        "list": "system:log",
-        "retrieve": "system:log",
+        "list": "system:log:view",
+        "retrieve": "system:log:view",
     }
 
     def get_queryset(self):

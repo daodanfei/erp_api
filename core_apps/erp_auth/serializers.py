@@ -104,6 +104,13 @@ class ERPRoleSerializer(serializers.ModelSerializer):
         ]
         if invalid_permissions:
             raise serializers.ValidationError("包含当前租户未启用的权限")
+        invisible_permissions = [
+            permission.code
+            for permission in permissions
+            if not permission.role_editor_visible or permission.code.endswith(":reference")
+        ]
+        if invisible_permissions:
+            raise serializers.ValidationError("包含不可在角色编辑器配置的内部权限")
         return permission_ids
 
     def validate(self, attrs):
@@ -134,7 +141,9 @@ class ERPRoleSerializer(serializers.ModelSerializer):
             instance.save(update_fields=list(validated_data.keys()))
         if permission_ids is not None:
             permission_ids = expand_permission_ids_with_dependencies(tenant=tenant, permission_ids=permission_ids)
-            instance.permissions.set(ERPPermission.objects.filter(id__in=permission_ids))
+            preserved_ids = instance.permissions.filter(role_editor_visible=False).values_list("id", flat=True)
+            merged_ids = list(dict.fromkeys([*permission_ids, *preserved_ids]))
+            instance.permissions.set(ERPPermission.objects.filter(id__in=merged_ids))
         return instance
 
 

@@ -38,8 +38,8 @@ class ERPPermissionViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     filterset_fields = ["type", "status"]
     permission_map = {
-        "list": "system:role",
-        "retrieve": "system:role",
+        "list": "system:role:view",
+        "retrieve": "system:role:view",
     }
 
     def get_queryset(self):
@@ -47,7 +47,11 @@ class ERPPermissionViewSet(viewsets.ReadOnlyModelViewSet):
         if not isinstance(self.request.user, ERPUser):
             return queryset.none()
         enabled_codes = get_enabled_erp_permission_codes(tenant=self.request.user.tenant)
-        return queryset.filter(code__in=enabled_codes).exclude(code__endswith=":reference").order_by("order", "id")
+        return (
+            queryset.filter(code__in=enabled_codes, role_editor_visible=True)
+            .exclude(code__endswith=":reference")
+            .order_by("order", "id")
+        )
 
 
 class ERPDepartmentViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
@@ -55,8 +59,8 @@ class ERPDepartmentViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet)
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     filterset_fields = ["status"]
     permission_map = {
-        "list": "system:dept",
-        "retrieve": "system:dept",
+        "list": "system:dept:view",
+        "retrieve": "system:dept:view",
         "create": "dept:create",
         "update": "dept:update",
         "partial_update": "dept:update",
@@ -94,8 +98,8 @@ class ERPRoleViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     filterset_fields = ["tenant", "status", "is_system"]
     permission_map = {
-        "list": "system:role",
-        "retrieve": "system:role",
+        "list": "system:role:view",
+        "retrieve": "system:role:view",
         "create": "role:create",
         "update": "role:update",
         "partial_update": "role:update",
@@ -119,7 +123,7 @@ class ERPRoleViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
 
 class ERPDataResourceView(APIView):
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
-    permission_map = {"get": "system:role", "put": "role:update"}
+    permission_map = {"get": "system:role:view", "put": "role:update"}
 
     def get(self, request):
         from .data_permissions import DATA_RESOURCES, get_special_options, resolve_permission_type, supported_permission_types
@@ -195,7 +199,7 @@ class ERPDataSpecialGrantViewSet(viewsets.ModelViewSet):
     serializer_class = ERPDataSpecialGrantSerializer
     permission_classes = [permissions.IsAuthenticated, ERPUserOnly, ERPActionPermission]
     http_method_names = ["get", "post", "delete", "head", "options"]
-    permission_map = {"list": "system:role", "create": "role:update", "destroy": "role:update"}
+    permission_map = {"list": "system:role:view", "create": "role:update", "destroy": "role:update"}
 
     def get_queryset(self):
         queryset = ERPDataSpecialGrant.objects.filter(tenant=self.request.user.tenant).select_related(
@@ -212,8 +216,8 @@ class ERPUserViewSet(OperationLogModelViewSetMixin, viewsets.ModelViewSet):
     filterset_fields = ["tenant", "status", "must_change_password"]
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     permission_map = {
-        "list": "system:user",
-        "retrieve": "system:user",
+        "list": "system:user:view",
+        "retrieve": "system:user:view",
         "reference_options": "system:user:reference",
         "create": "user:create",
         "update": "user:update",

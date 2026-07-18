@@ -44,8 +44,8 @@ class UserAdmin(BaseUserAdmin):
     filter_horizontal = ("groups", "user_permissions", "roles")
 
 
-admin.site.site_header = "AI ERP 管理后台"
-admin.site.site_title = "AI ERP Admin"
+admin.site.site_header = "TWC ERP 管理后台"
+admin.site.site_title = "TWC ERP Admin"
 admin.site.index_title = "系统数据管理"
 
 

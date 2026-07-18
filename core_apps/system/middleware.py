@@ -1,6 +1,8 @@
 import time
 import json
 
+from django.core.exceptions import DisallowedHost
+from django.http import HttpResponseBadRequest
 from django.utils.deprecation import MiddlewareMixin
 
 from core_apps.erp_auth.models import ERPUser
@@ -52,6 +54,20 @@ IDENTITY_FIELD_NAMES = (
     "name",
     "code",
 )
+
+
+class InvalidHostMiddleware:
+    """Reject invalid Host headers without raising a noisy security exception."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        try:
+            request.get_host()
+        except DisallowedHost:
+            return HttpResponseBadRequest()
+        return self.get_response(request)
 
 
 def _extract_request_payload(request):

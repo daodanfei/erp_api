@@ -1,7 +1,7 @@
 import json
 from unittest.mock import patch
 
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from rest_framework.request import Request
 from rest_framework.test import APITestCase
 from rest_framework.response import Response
@@ -19,6 +19,7 @@ from .middleware import (
     _extract_operation_target,
     _mask_sensitive_fields,
     _normalize_logged_path,
+    InvalidHostMiddleware,
     OperationLogMiddleware,
 )
 from .models import OperationLog
@@ -117,6 +118,25 @@ class OperationLogMiddlewareTest(TestCase):
     def setUp(self):
         self.tenant = Tenant.objects.create(code="log-middleware-tenant", name="Log Middleware Tenant", status="ACTIVE")
         self.user = ERPUser.objects.create_user(tenant=self.tenant, username="middleware_user", password="password")
+
+    @override_settings(ALLOWED_HOSTS=["erp.example.com"])
+    def test_invalid_host_returns_400_without_disallowed_host_error_log(self):
+        request = RequestFactory().get("/api/system/logs/", HTTP_HOST="1.1.1.1")
+        middleware = InvalidHostMiddleware(lambda current_request: Response(status=200))
+
+        with self.assertNoLogs("django.security.DisallowedHost", level="ERROR"):
+            response = middleware(request)
+
+        self.assertEqual(response.status_code, 400)
+
+    @override_settings(ALLOWED_HOSTS=["erp.example.com"])
+    def test_valid_host_continues_to_next_middleware(self):
+        request = RequestFactory().get("/api/system/logs/", HTTP_HOST="erp.example.com")
+        middleware = InvalidHostMiddleware(lambda current_request: Response(status=204))
+
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 204)
 
     def test_normalize_logged_path_maps_create_request_to_detail_path(self):
         class DummyRequest:
